@@ -9,6 +9,9 @@ import * as THREE from 'three';
  * intersect world geometry (see docs/TASKS.md, T-08).
  */
 
+/** Height of the scope's optical axis in weapon-local space. */
+const SCOPE_AXIS_Y = 0.100;
+
 export const WEAPONS = {
   carbine: {
     name: 'Carbine',
@@ -27,6 +30,11 @@ export const WEAPONS = {
     recoilPitch: 0.011,
     recoilYaw: 0.0035,
     range: 220,
+    // Field of view while aimed. The scope is optical only in the sense that
+    // matters to a player: a narrower frustum plus a sight picture. Rendering
+    // the world a second time into the lens would cost a whole extra scene
+    // pass for parallax nobody looks for at this range.
+    scopeFov: 42,
   },
 };
 
@@ -48,7 +56,13 @@ export class Weapon {
     camera.add( this.group );
 
     this._restPos = new THREE.Vector3( 0.24, -0.20, -0.42 );
-    this._adsPos = new THREE.Vector3( 0.0, -0.115, -0.30 );
+    // Puts the scope's optical axis exactly at eye height, so the player looks
+    // down the bore rather than at the outside of the tube. Note this holds for
+    // any value of the viewmodel compensation scale: the aimed offset and the
+    // axis height cancel to zero before the scale is applied, and zero scales
+    // to zero. Ballistics are unaffected either way -- the hitscan comes from
+    // the camera, not from the model.
+    this._adsPos = new THREE.Vector3( 0.0, -SCOPE_AXIS_Y, -0.30 );
     this._kick = new THREE.Vector3();
     this._kickRot = 0;
     this._swayTarget = new THREE.Vector2();
@@ -101,6 +115,31 @@ export class Weapon {
     this._rearSight = add( railMat, [ 0.026, 0.030, 0.012 ], [ 0, 0.064, 0.06 ] );
     this._frontSight = add( railMat, [ 0.010, 0.034, 0.010 ], [ 0, 0.066, -0.34 ] );
     add( accentMat, [ 0.008, 0.008, 0.008 ], [ 0, 0.079, -0.34 ] );
+
+    // --- Scope -------------------------------------------------------------
+    // Sits above the irons rather than replacing them; the ADS pose is offset
+    // by exactly the height difference so the aim point does not move.
+    // Open-ended, and front-faces only: solid when seen from outside at the
+    // hip, and culled away entirely once the eye is inside it. That is the
+    // whole trick -- no separate render pass, no hiding the weapon on a
+    // threshold, the tube simply stops occluding when you are looking through
+    // it.
+    const tube = new THREE.Mesh(
+      new THREE.CylinderGeometry( 0.024, 0.024, 0.20, 16, 1, true ), railMat,
+    );
+    tube.rotation.x = Math.PI / 2;
+    tube.position.set( 0, SCOPE_AXIS_Y, -0.06 );
+    this.group.add( tube );
+
+    const bell = new THREE.Mesh(
+      new THREE.CylinderGeometry( 0.030, 0.024, 0.05, 16, 1, true ), railMat,
+    );
+    bell.rotation.x = Math.PI / 2;
+    bell.position.set( 0, SCOPE_AXIS_Y, -0.175 );
+    this.group.add( bell );
+
+    add( railMat, [ 0.020, 0.030, 0.018 ], [ 0, SCOPE_AXIS_Y - 0.030, -0.13 ] );
+    add( railMat, [ 0.020, 0.030, 0.018 ], [ 0, SCOPE_AXIS_Y - 0.030, 0.005 ] );
 
     // Charging handle detail + a lit status dot, both purely for silhouette.
     add( railMat, [ 0.014, 0.014, 0.05 ], [ 0.036, 0.030, 0.10 ] );
@@ -204,6 +243,9 @@ export class Weapon {
     this.reloading = false;
     this._cooldown = 0;
   }
+
+  /** 0 at the hip, 1 fully aimed. Drives the camera's field of view. */
+  get adsBlend() { return this._adsBlend; }
 
   startReload() {
     if ( this.reloading || this.mag >= this.spec.magSize || this.reserve <= 0 ) return false;

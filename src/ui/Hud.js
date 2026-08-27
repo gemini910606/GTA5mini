@@ -100,6 +100,21 @@ export class Hud {
     el.classList.remove( 'hidden' );
   }
 
+  /**
+   * Scope sight picture. `blend` is 0 at the hip, 1 fully aimed.
+   *
+   * The vignette is what sells a scope, not the zoom: a hard black surround
+   * with the world showing through a circle. The normal crosshair is hidden
+   * once it takes over, or the player is aiming with two reticles.
+   */
+  setScope( blend ) {
+    const el = this.$( 'scope' );
+    if ( ! el ) return;
+    const on = blend > 0.55;
+    el.style.opacity = on ? String( Math.min( 1, ( blend - 0.55 ) / 0.3 ) ) : '0';
+    if ( this.crosshair ) this.crosshair.classList.toggle( 'hide', on );
+  }
+
   setScore( kills ) {
     if ( this._last.score === kills ) return;
     this._last.score = kills;
