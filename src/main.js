@@ -81,6 +81,12 @@ class Game {
 
     overlay.addEventListener( 'click', () => this.input.requestLock() );
 
+    this.input.on( 'fallback', () => {
+      // Tell the player why the mouse is not captured, once.
+      const el = document.getElementById( 'weaponName' );
+      if ( el ) el.textContent = 'Carbine — hold mouse to look';
+    } );
+
     this.input.on( 'lock', () => {
       overlay.classList.add( 'hidden' );
       this.hud.show();
@@ -227,7 +233,7 @@ class Game {
     this.hud.setHealth( p.health, p.maxHealth );
     this.hud.setStamina( p.stamina, p.maxStamina );
     this.hud.setAmmo( w.mag, w.reserve, w.spec.magSize );
-    this.hud.setWeaponName( w.spec.name );
+    if ( ! this.input.dragFallback ) this.hud.setWeaponName( w.spec.name );
     this.hud.setReloading( w.reloading );
     this.hud.setScore( this.enemies.kills );
     this.hud.setSpread( w.currentSpread, p.adsBlend > 0.75 );

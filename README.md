@@ -40,6 +40,18 @@ npm run dev
 | `T` | 切換時段（黃昏 / 正午 / 日落）|
 | `Esc` | 釋放滑鼠 |
 
+## 單檔打包
+
+```bash
+npm run artifact     # 產出 dist-single.html
+```
+
+把整個遊戲（含 three.js）內嵌成一個約 0.7 MB 的 HTML，
+`file://` 直接開啟即可玩，零網路請求。適合當附件寄出或丟進任何靜態空間。
+
+在無法取得 pointer lock 的環境（iframe 內嵌、部分文件檢視器），
+會自動退回「按住滑鼠拖曳轉視角」模式。
+
 ## 已經做了什麼
 
 **渲染**
