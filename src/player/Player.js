@@ -299,6 +299,26 @@ export class Player {
     this.yaw += yaw * 0.42;
   }
 
+  /**
+   * Returns the player to a fresh run in place. Field assignments only — no
+   * geometry is touched, so a restart allocates nothing.
+   */
+  reset( position = null ) {
+    this.health = 100;
+    this.stamina = this.maxStamina ?? this.stamina;
+    this.velocity.set( 0, 0, 0 );
+    if ( position ) this.position.copy( position );
+    else this.position.set( 0, 0, 26 );
+    this.yaw = 0;
+    this.pitch = 0;
+    this.grounded = true;
+    this.crouching = false;
+    this.sprinting = false;
+    this._landDip = 0;
+    this._recoilPitch = 0;
+    this._recoilYaw = 0;
+  }
+
   damage( amount ) {
     this.health = Math.max( 0, this.health - amount );
     return this.health;

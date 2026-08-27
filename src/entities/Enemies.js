@@ -249,6 +249,11 @@ class Enemy {
       this.state = 'dead';
       this._deathTime = 0;
       this._respawnTimer = RESPAWN_DELAY;
+      // Announced here rather than from applyHit: anything that can kill an
+      // enemy should advance the wave and the score, not just the one damage
+      // path that happens to exist today.
+      this.manager.kills ++;
+      this.manager.onDeath?.( this );
       return { killed: true, damage: dealt, headshot };
     }
     return { killed: false, damage: dealt, headshot };
@@ -565,6 +570,43 @@ export class EnemyManager {
     this.kills = 0;
     this._spawnCursor = 0;
     this.onEnemyFire = null;
+    /** `( enemy ) => void`, fired once as an enemy finishes dying. */
+    this.onDeath = null;
+    /**
+     * When false the pool stops refilling itself and something else — the wave
+     * system — decides what arrives. Left true so the manager is still usable
+     * on its own.
+     */
+    this.autoRespawn = true;
+  }
+
+  /** Enemies currently deployed and not yet dead. */
+  get aliveCount() {
+    let n = 0;
+    for ( const e of this.enemies ) if ( e.deployed && e.alive ) n ++;
+    return n;
+  }
+
+  /**
+   * Returns every enemy to the pool. Nothing is destroyed or recreated — the
+   * meshes, geometries and materials built in the constructor are reused, which
+   * is what keeps a restart free of allocation.
+   */
+  reset() {
+    for ( const e of this.enemies ) {
+      e.alive = false;
+      e.deployed = false;
+      e.group.visible = false;
+      e.group.rotation.set( 0, 0, 0 );
+      e.velocity.set( 0, 0, 0 );
+      e.hasTarget = false;
+      e.visible = false;
+      e.engaged = false;
+      e._sinceSeen = Infinity;
+      e.state = 'idle';
+    }
+    this.kills = 0;
+    this._spawnCursor = 0;
   }
 
   /** Raycast targets — every hitbox mesh of every living enemy. */
@@ -600,7 +642,7 @@ export class EnemyManager {
   update( dt, ctx ) {
     for ( const e of this.enemies ) {
       const result = e.update( dt, { ...ctx, level: this.level, onEnemyFire: this.onEnemyFire } );
-      if ( result === 'respawn' ) this.spawnOne( ctx.playerPosition );
+      if ( result === 'respawn' && this.autoRespawn ) this.spawnOne( ctx.playerPosition );
     }
   }
 
@@ -609,7 +651,6 @@ export class EnemyManager {
     const enemy = object.userData.enemy;
     if ( ! enemy ) return null;
     const result = enemy.takeDamage( damage, object.userData.part );
-    if ( result.killed ) this.kills ++;
     return { ...result, enemy };
   }
 }
