@@ -1,5 +1,5 @@
 import { chromium } from 'playwright';
-import { serve, CHROMIUM } from './static-server.mjs';
+import { serve, CHROMIUM, NAV_TIMEOUT } from './static-server.mjs';
 import { stat, mkdtemp, copyFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -33,7 +33,7 @@ page.on( 'request', r => {
   if ( ! u.startsWith( 'http://localhost:5196' ) && ! u.startsWith( 'data:' ) ) requests.push( u );
 } );
 
-await page.goto( 'http://localhost:5196/', { waitUntil: 'load' } );
+await page.goto( 'http://localhost:5196/', { waitUntil: 'load', timeout: NAV_TIMEOUT } );
 await page.screenshot( { path: 'shots/artifact-title.png' } );
 
 await page.waitForFunction(

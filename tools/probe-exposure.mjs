@@ -12,7 +12,7 @@
  *   clipped    < 3 %         (fraction of pixels at 250/255 or above)
  */
 import { chromium } from 'playwright';
-import { serve, CHROMIUM } from './static-server.mjs';
+import { serve, CHROMIUM, NAV_TIMEOUT } from './static-server.mjs';
 
 const PORT = 5197;
 const server = await serve( new URL( '../dist/', import.meta.url ).pathname, PORT );
@@ -21,7 +21,7 @@ const page = await browser.newPage( { viewport: { width: 480, height: 270 } } );
 
 page.on( 'pageerror', e => console.error( 'pageerror:', e.message ) );
 
-await page.goto( `http://localhost:${ PORT }/`, { waitUntil: 'load' } );
+await page.goto( `http://localhost:${ PORT }/`, { waitUntil: 'load', timeout: NAV_TIMEOUT } );
 await page.waitForFunction( () => globalThis.__GAME__ !== undefined, { timeout: 120000 } );
 
 await page.evaluate( () => {
