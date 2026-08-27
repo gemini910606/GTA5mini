@@ -110,7 +110,7 @@ class Game {
         this.player.damage( 4 + Math.random() * 6 );
         this.hud.damageFlash();
       }
-      const muzzle = enemy.group.localToWorld( new THREE.Vector3( 0.30, 1.14, -0.48 ) );
+      const muzzle = enemy.muzzleWorld();
       this.impacts.spawnTracer( muzzle, this.camera.position );
       this.impacts.spawnSparks( muzzle, new THREE.Vector3( 0, 0.4, 0 ), 4 );
     };
@@ -184,11 +184,19 @@ class Game {
     if ( input.wasPressed( 'Digit3' ) ) this.setQuality( 'high' );
 
     if ( input.wasPressed( 'KeyT' ) ) this.cycleTimeOfDay();
+    if ( input.wasPressed( 'KeyH' ) ) this.cycleIblSource();
   }
 
   setQuality( name ) {
     this.renderer.setQuality( name );
     return name;
+  }
+
+  /** Flips IBL between the procedural sky and the embedded HDRI probe. */
+  cycleIblSource() {
+    const next = this.environment.cycleIblSource();
+    this.updateHud();
+    return next;
   }
 
   cycleTimeOfDay() {

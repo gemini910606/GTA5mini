@@ -10,7 +10,7 @@
  */
 import { chromium } from 'playwright';
 import { mkdir } from 'node:fs/promises';
-import { serve, CHROMIUM } from './static-server.mjs';
+import { serve, CHROMIUM, NAV_TIMEOUT } from './static-server.mjs';
 
 const PORT = 5199;
 const WIDTH = 1280, HEIGHT = 720;
@@ -37,7 +37,7 @@ const errors = [];
 page.on( 'console', m => { if ( m.type() === 'error' ) errors.push( `console.error: ${ m.text() }` ); } );
 page.on( 'pageerror', e => errors.push( `pageerror: ${ e.message }` ) );
 
-await page.goto( `http://localhost:${ PORT }/`, { waitUntil: 'load' } );
+await page.goto( `http://localhost:${ PORT }/`, { waitUntil: 'load', timeout: NAV_TIMEOUT } );
 await page.waitForFunction(
   () => globalThis.__GAME__ !== undefined || document.getElementById( 'err' )?.textContent,
   { timeout: 120000 },
