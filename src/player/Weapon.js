@@ -197,6 +197,14 @@ export class Weapon {
     return true;
   }
 
+  /** Back to a full magazine and full reserve, for a restart. */
+  resetAmmo() {
+    this.mag = this.spec.magSize;
+    this.reserve = this.spec.reserve;
+    this.reloading = false;
+    this._cooldown = 0;
+  }
+
   startReload() {
     if ( this.reloading || this.mag >= this.spec.magSize || this.reserve <= 0 ) return false;
     this.reloading = true;

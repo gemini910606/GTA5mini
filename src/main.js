@@ -7,6 +7,7 @@ import { Player } from './player/Player.js';
 import { Weapon, WEAPONS } from './player/Weapon.js';
 import { Impacts } from './fx/Impacts.js';
 import { Audio } from './audio/Audio.js';
+import { GameState } from './core/GameState.js';
 import { EnemyManager } from './entities/Enemies.js';
 import { Hud } from './ui/Hud.js';
 
@@ -49,7 +50,12 @@ class Game {
     this._buildFlashlight();
     this._wireEvents();
 
-    this.enemies.spawnInitial( 5 );
+    this.state = new GameState( {
+      enemies: this.enemies,
+      player: this.player,
+      onPhase: ( phase ) => this._onPhase( phase ),
+    } );
+    this.state.start( this.camera.position );
 
     this.raycaster = new THREE.Raycaster();
     this.raycaster.far = this.weapon.spec.range;
@@ -146,6 +152,22 @@ class Game {
     setTimeout( () => this.audio.play( 'reloadIn', { volume: 0.6 } ), seat * 620 );
   }
 
+  _onPhase( phase ) {
+    const s = this.state;
+    if ( phase === 'fighting' ) {
+      this.hud.banner( `Wave ${ s.wave + 1 }`, `${ s.spec.enemies } hostiles`, '' );
+      setTimeout( () => { if ( this.state.phase === 'fighting' ) this.hud.banner( null ); }, 1800 );
+    } else if ( phase === 'intermission' ) {
+      this.hud.banner( 'Wave Clear', 'next wave incoming', 'good' );
+      this.audio.play( 'kill', { volume: 0.9, rate: 0.8 } );
+    } else if ( phase === 'dead' ) {
+      this.hud.banner( 'You Died', `wave ${ s.wave + 1 } · ${ s.kills } down · press R`, 'warn' );
+      this.audio.play( 'hurt', { volume: 1 } );
+    } else if ( phase === 'victory' ) {
+      this.hud.banner( 'Cleared', `${ s.kills } down · press R to run it again`, 'good' );
+    }
+  }
+
   _hitscan( origin, direction ) {
     this.raycaster.set( origin, direction );
     this.raycaster.far = this.weapon.spec.range;
@@ -202,7 +224,15 @@ class Game {
     this.player.setAiming( input.isMouseDown( 2 ), dt );
 
     if ( input.isMouseDown( 0 ) ) this.weapon.tryFire( this.player );
-    if ( input.wasPressed( 'KeyR' ) && this.weapon.startReload() ) this._reloadSound();
+    if ( input.wasPressed( 'KeyR' ) ) {
+      if ( this.state.canRestart ) {
+        this.state.restart( this.camera.position );
+        this.weapon.resetAmmo?.();
+        this.hud.banner( null );
+      } else if ( this.weapon.startReload() ) {
+        this._reloadSound();
+      }
+    }
 
     // Auto-reload on a dry mag keeps the prototype playable without thinking.
     if ( this.weapon.mag === 0 && ! this.weapon.reloading && this.weapon.startReload() ) this._reloadSound();
@@ -254,10 +284,14 @@ class Game {
       grounded: this.player.grounded,
     } );
 
-    this.enemies.update( dt, {
-      playerPosition: this.camera.position,
-      elapsed: this.elapsed,
-    } );
+    // A finished run keeps rendering, but nothing in it moves or shoots.
+    if ( this.state.phase !== 'dead' && this.state.phase !== 'victory' ) {
+      this.enemies.update( dt, {
+        playerPosition: this.camera.position,
+        elapsed: this.elapsed,
+      } );
+    }
+    this.state.update( dt, this.camera.position );
 
     this.environment.followTarget( this.player.position );
     this.environment.update( this.elapsed );
@@ -271,6 +305,14 @@ class Game {
 
   updateHud() {
     const p = this.player, w = this.weapon;
+    const st = this.state;
+    if ( st ) {
+      this.hud.setWave(
+        st.phase === 'idle' ? null : st.wave + 1,
+        st.waveCount,
+        st.phase === 'fighting' ? st.remaining : null,
+      );
+    }
     this.hud.setHealth( p.health, p.maxHealth );
     this.hud.setStamina( p.stamina, p.maxStamina );
     this.hud.setAmmo( w.mag, w.reserve, w.spec.magSize );

@@ -8,6 +8,9 @@
 export class Hud {
 
   constructor() {
+    /** Lazily cached element lookups, for the parts added after the original HUD. */
+    this._els = new Map();
+
     this.root = document.getElementById( 'hud' );
     this.crosshair = document.getElementById( 'crosshair' );
     this.hitmarker = document.getElementById( 'hitmarker' );
@@ -25,6 +28,12 @@ export class Hud {
     this._last = {};
     this._hitmarkerTimer = null;
     this._vignetteTimer = null;
+  }
+
+  /** Cached getElementById. Returns null if the element is absent. */
+  $( id ) {
+    if ( ! this._els.has( id ) ) this._els.set( id, document.getElementById( id ) );
+    return this._els.get( id );
   }
 
   show() { this.root.classList.remove( 'hidden' ); }
@@ -66,6 +75,29 @@ export class Hud {
     if ( this._last.reloading === on ) return;
     this._last.reloading = on;
     this.reloading.classList.toggle( 'on', on );
+  }
+
+  /** Wave counter and how many of it are left. */
+  setWave( wave, total, left ) {
+    const v = this.$( 'waveVal' );
+    if ( v ) v.textContent = wave === null ? '—' : `Wave ${ wave } / ${ total }`;
+    const l = this.$( 'waveLeft' );
+    if ( l ) l.textContent = left === null || left === undefined ? '' : `${ left } left`;
+  }
+
+  /**
+   * Centre banner for phase changes. `tone` is '', 'warn' or 'good'.
+   * Passing no title hides it.
+   */
+  banner( title, sub = '', tone = '' ) {
+    const el = this.$( 'banner' );
+    if ( ! el ) return;
+    if ( ! title ) { el.classList.add( 'hidden' ); return; }
+    const t = this.$( 'bannerTitle' ); if ( t ) t.textContent = title;
+    const s = this.$( 'bannerSub' ); if ( s ) s.textContent = sub;
+    el.classList.remove( 'warn', 'good' );
+    if ( tone ) el.classList.add( tone );
+    el.classList.remove( 'hidden' );
   }
 
   setScore( kills ) {
