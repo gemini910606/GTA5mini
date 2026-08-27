@@ -8,6 +8,9 @@ import { Weapon, WEAPONS } from './player/Weapon.js';
 import { Impacts } from './fx/Impacts.js';
 import { Audio } from './audio/Audio.js';
 import { GameState } from './core/GameState.js';
+
+/** Hip-fire field of view. The scope narrows to `spec.scopeFov`. */
+const BASE_FOV = 75;
 import { EnemyManager } from './entities/Enemies.js';
 import { Hud } from './ui/Hud.js';
 
@@ -29,7 +32,7 @@ class Game {
     this.container = container;
 
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.02, 800 );
+    this.camera = new THREE.PerspectiveCamera( BASE_FOV, window.innerWidth / window.innerHeight, 0.02, 800 );
     // The viewmodel is a child of the camera, so the camera must be in the graph.
     this.scene.add( this.camera );
 
@@ -158,6 +161,39 @@ class Game {
     this.audio.play( 'reloadOut', { volume: 0.6 } );
     const seat = this.weapon.spec.reloadTime ?? 1.6;
     setTimeout( () => this.audio.play( 'reloadIn', { volume: 0.6 } ), seat * 620 );
+  }
+
+  /**
+   * Narrows the camera while aimed, and keeps the weapon the same size on
+   * screen while it happens.
+   *
+   * The viewmodel is a child of the camera, so shrinking the frustum magnifies
+   * it too — at 42° the gun would swell to fill half the frame. Scaling its
+   * position and size by the same ratio the frustum changed by cancels that
+   * exactly: apparent size goes as size / (distance x tan(fov/2)), so scaling
+   * size and distance together holds it constant. It is the cheap half of what
+   * a separate viewmodel pass (T-02) would buy.
+   */
+  _updateScope() {
+    const blend = this.weapon.adsBlend;
+    const fov = THREE.MathUtils.lerp( BASE_FOV, this.weapon.spec.scopeFov, blend );
+    if ( Math.abs( this.camera.fov - fov ) > 1e-4 ) {
+      this.camera.fov = fov;
+      this.camera.updateProjectionMatrix();
+    }
+
+    const k = Math.tan( THREE.MathUtils.degToRad( fov ) * 0.5 )
+      / Math.tan( THREE.MathUtils.degToRad( BASE_FOV ) * 0.5 );
+    this.weapon.group.scale.setScalar( k );
+    this.weapon.group.position.multiplyScalar( k );
+
+    // With the eye on the optical axis the receiver sits directly below it and
+    // fills the bottom third of the sight picture. Every game with a magnified
+    // optic hides the weapon at this point rather than modelling around it; the
+    // surround is already fully opaque by 0.85, so the cut is brief and covered.
+    this.weapon.group.visible = blend < 0.9;
+
+    this.hud.setScope( blend );
   }
 
   _onPhase( phase ) {
@@ -300,6 +336,7 @@ class Game {
       } );
     }
     this.state.update( dt, this.camera.position );
+    this._updateScope();
 
     this.environment.followTarget( this.player.position );
     this.environment.update( this.elapsed );

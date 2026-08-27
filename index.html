@@ -83,6 +83,26 @@
   #banner.warn #bannerTitle { color: #ff5a3c; }
   #banner.good #bannerTitle { color: #57e08a; }
 
+  /* Scope sight picture. The surround is a radial gradient rather than an
+     image so it scales to any viewport; `vmin` keeps the circle round on both
+     portrait and landscape. */
+  #scope { position: absolute; inset: 0; opacity: 0; transition: opacity .08s linear;
+           pointer-events: none;
+           background: radial-gradient(circle at 50% 50%,
+             transparent 0 31vmin, rgba(0,0,0,.55) 31vmin 32vmin,
+             #000 33vmin 200%); }
+  /* Reticle: four hairline segments leaving a gap at the crossing point, plus a
+     centre dot. Drawn as elements rather than as layered background gradients —
+     the shorthand form silently rendered only one of the two axes, and explicit
+     boxes cannot do that. */
+  #scope .seg { position: absolute; background: rgba(230,238,245,.8); }
+  #scope .seg.l { left: 21%; right: 54%; top: 50%; height: 1px; }
+  #scope .seg.r { left: 54%; right: 21%; top: 50%; height: 1px; }
+  #scope .seg.t { top: 21%; bottom: 54%; left: 50%; width: 1px; }
+  #scope .seg.b { top: 54%; bottom: 21%; left: 50%; width: 1px; }
+  #scope .dot { position: absolute; left: 50%; top: 50%; width: 3px; height: 3px;
+                margin: -1px 0 0 -1px; background: #ff5a3c; border-radius: 50%; }
+
   #damageVignette {
     position: absolute; inset: 0; opacity: 0; transition: opacity .35s ease-out;
     background: radial-gradient(ellipse at center, transparent 42%, rgba(190,20,20,.62) 100%);
@@ -135,6 +155,10 @@
       <div id="wave"><span id="waveVal">—</span><span id="waveLeft"></span></div>
     </div>
     <div id="banner" class="hidden"><div id="bannerTitle"></div><div id="bannerSub"></div></div>
+    <div id="scope">
+      <i class="seg l"></i><i class="seg r"></i><i class="seg t"></i><i class="seg b"></i>
+      <i class="dot"></i>
+    </div>
     <div id="crosshair"><i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i></div>
     <div id="hitmarker">
       <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round">
