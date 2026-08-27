@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
+import { existsSync } from 'node:fs';
 
 const MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
@@ -33,8 +34,27 @@ export async function serve( root, port ) {
   return server;
 }
 
+/**
+ * Launch options for every headless harness here: SwiftShader software GL,
+ * because neither the dev container nor a CI runner has a GPU.
+ *
+ * The executable path is only pinned when that exact build is present. It is
+ * right for the dev container and wrong everywhere else, so when it is missing
+ * the key is omitted entirely and Playwright resolves the Chromium it
+ * installed itself. Set CHROMIUM_PATH to point somewhere else.
+ */
+const PINNED = process.env.CHROMIUM_PATH
+  ?? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+
+// Without a pinned build, ask for the full browser by channel rather than
+// letting Playwright default to chrome-headless-shell: the shell does not give
+// the SwiftShader flags below a usable WebGL2 context.
+const browser = existsSync( PINNED )
+  ? { executablePath: PINNED }
+  : { channel: 'chromium' };
+
 export const CHROMIUM = {
-  executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
+  ...browser,
   args: [
     '--use-gl=angle',
     '--use-angle=swiftshader',
