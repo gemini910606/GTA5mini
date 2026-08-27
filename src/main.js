@@ -110,7 +110,7 @@ class Game {
         this.player.damage( 4 + Math.random() * 6 );
         this.hud.damageFlash();
       }
-      const muzzle = enemy.group.localToWorld( new THREE.Vector3( 0.30, 1.14, -0.48 ) );
+      const muzzle = enemy.muzzleWorld();
       this.impacts.spawnTracer( muzzle, this.camera.position );
       this.impacts.spawnSparks( muzzle, new THREE.Vector3( 0, 0.4, 0 ), 4 );
     };
