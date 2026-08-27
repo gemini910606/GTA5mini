@@ -6,6 +6,7 @@ import { Level } from './world/Level.js';
 import { Player } from './player/Player.js';
 import { Weapon, WEAPONS } from './player/Weapon.js';
 import { Impacts } from './fx/Impacts.js';
+import { Audio } from './audio/Audio.js';
 import { EnemyManager } from './entities/Enemies.js';
 import { Hud } from './ui/Hud.js';
 
@@ -43,6 +44,7 @@ class Game {
     this.enemies = new EnemyManager( this.scene, this.level );
     this.hud = new Hud();
     this.input = new Input( this.renderer.renderer.domElement );
+    this.audio = new Audio( this.camera, this.scene );
 
     this._buildFlashlight();
     this._wireEvents();
@@ -77,6 +79,19 @@ class Game {
   }
 
   _wireEvents() {
+    // Autoplay policy: the AudioContext may only be built inside a user
+    // gesture. Bound on the document rather than to the pointer-lock event, so
+    // it also covers the drag-to-look fallback, where lock never fires and the
+    // game would otherwise stay silent.
+    window.addEventListener(
+      'pointerdown', () => { this.audio.start(); }, { once: true },
+    );
+
+    this.player.onStep = ( sprinting ) => this.audio.play( 'step', {
+      volume: sprinting ? 0.5 : 0.32,
+      rate: 0.9 + Math.random() * 0.25,
+    } );
+
     const overlay = document.getElementById( 'overlay' );
 
     overlay.addEventListener( 'click', () => this.input.requestLock() );
@@ -101,7 +116,11 @@ class Game {
       this.running = false;
     } );
 
-    this.weapon.onFire = ( origin, direction ) => this._hitscan( origin, direction );
+    this.weapon.onFire = ( origin, direction ) => {
+      // Slight per-shot detune, or a held trigger sounds like one looping sample.
+      this.audio.play( 'shot', { volume: 0.85, rate: 0.96 + Math.random() * 0.08 } );
+      this._hitscan( origin, direction );
+    };
 
     this.enemies.onEnemyFire = ( enemy, distance ) => {
       // Enemies are deliberately inaccurate and fall off hard with range.
@@ -109,14 +128,23 @@ class Game {
       if ( Math.random() < hitChance ) {
         this.player.damage( 4 + Math.random() * 6 );
         this.hud.damageFlash();
+        this.audio.play( 'hurt', { volume: 0.8 } );
       }
       const muzzle = enemy.group.localToWorld( new THREE.Vector3( 0.30, 1.14, -0.48 ) );
+      this.audio.playAt( 'enemyShot', muzzle, { rate: 0.94 + Math.random() * 0.12 } );
       this.impacts.spawnTracer( muzzle, this.camera.position );
       this.impacts.spawnSparks( muzzle, new THREE.Vector3( 0, 0.4, 0 ), 4 );
     };
   }
 
   // -------------------------------------------------------------------------
+
+  /** Magazine out, then seated — two events, because one click reads as a bug. */
+  _reloadSound() {
+    this.audio.play( 'reloadOut', { volume: 0.6 } );
+    const seat = this.weapon.spec.reloadTime ?? 1.6;
+    setTimeout( () => this.audio.play( 'reloadIn', { volume: 0.6 } ), seat * 620 );
+  }
 
   _hitscan( origin, direction ) {
     this.raycaster.set( origin, direction );
@@ -145,6 +173,8 @@ class Game {
     if ( enemyResult ) {
       this.impacts.fleshImpact( muzzle, hit.point, normal );
       this.hud.hitmark();
+      this.audio.play( enemyResult.killed ? 'kill' : 'hitmarker',
+        { volume: enemyResult.headshot ? 0.9 : 0.65 } );
 
       // Damage number, projected from the hit point into screen space.
       const ndc = hit.point.clone().project( this.camera );
@@ -158,6 +188,9 @@ class Game {
       }
     } else {
       this.impacts.bulletImpact( muzzle, hit.point, normal );
+      // At the point of impact, not at the muzzle — a shot into the far wall
+      // should crack over there.
+      this.audio.playAt( 'impact', hit.point, { volume: 0.5, rate: 0.9 + Math.random() * 0.3 } );
     }
   }
 
@@ -169,10 +202,10 @@ class Game {
     this.player.setAiming( input.isMouseDown( 2 ), dt );
 
     if ( input.isMouseDown( 0 ) ) this.weapon.tryFire( this.player );
-    if ( input.wasPressed( 'KeyR' ) ) this.weapon.startReload();
+    if ( input.wasPressed( 'KeyR' ) && this.weapon.startReload() ) this._reloadSound();
 
     // Auto-reload on a dry mag keeps the prototype playable without thinking.
-    if ( this.weapon.mag === 0 && ! this.weapon.reloading ) this.weapon.startReload();
+    if ( this.weapon.mag === 0 && ! this.weapon.reloading && this.weapon.startReload() ) this._reloadSound();
 
     if ( input.wasPressed( 'KeyF' ) ) {
       this.flashlightOn = ! this.flashlightOn;

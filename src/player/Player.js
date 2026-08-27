@@ -48,6 +48,9 @@ export class Player {
 
     this._bobPhase = 0;
     this._bobAmount = 0;
+    this._stepPhase = 0;
+    /** Fired once per footfall. `( sprinting: boolean ) => void` */
+    this.onStep = null;
     this._recoilPitch = 0;
     this._recoilYaw = 0;
     this._landDip = 0;
@@ -236,6 +239,20 @@ export class Player {
     const bobTarget = ( moving && this.grounded ) ? Math.min( horizontalSpeed / SPEED.walk, 1.5 ) : 0;
     this._bobAmount = THREE.MathUtils.damp( this._bobAmount, bobTarget, 8, dt );
     this._bobPhase += horizontalSpeed * dt * 1.9;
+
+    // The view bob already tracks stride; a footfall is a half-cycle of it, so
+    // steps stay locked to the animation instead of running on a timer that
+    // drifts against it.
+    if ( moving && this.grounded ) {
+      this._stepPhase += horizontalSpeed * dt * 1.9;
+      if ( this._stepPhase >= Math.PI ) {
+        this._stepPhase -= Math.PI;
+        this.onStep?.( this.sprinting );
+      }
+    } else {
+      // Land the next step promptly rather than mid-stride after a pause.
+      this._stepPhase = Math.PI * 0.75;
+    }
 
     const bobY = Math.sin( this._bobPhase * 2 ) * 0.032 * this._bobAmount * ( 1 - this._adsBlend * 0.8 );
     const bobX = Math.cos( this._bobPhase ) * 0.028 * this._bobAmount * ( 1 - this._adsBlend * 0.8 );
