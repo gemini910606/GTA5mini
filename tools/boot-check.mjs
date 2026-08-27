@@ -1,5 +1,5 @@
 import { chromium } from 'playwright';
-import { serve, CHROMIUM } from './static-server.mjs';
+import { serve, CHROMIUM, NAV_TIMEOUT } from './static-server.mjs';
 
 const server = await serve( new URL( '../dist/', import.meta.url ).pathname, 5198 );
 const browser = await chromium.launch( CHROMIUM );
@@ -10,7 +10,7 @@ page.on( 'console', m => { if ( m.type() === 'error' ) errors.push( 'console: ' 
 page.on( 'pageerror', e => errors.push( 'pageerror: ' + e.message ) );
 
 const t0 = Date.now();
-await page.goto( 'http://localhost:5198/', { waitUntil: 'load' } );
+await page.goto( 'http://localhost:5198/', { waitUntil: 'load', timeout: NAV_TIMEOUT } );
 await page.waitForFunction(
   () => globalThis.__GAME__ !== undefined || document.getElementById( 'err' )?.textContent,
   { timeout: 120000 },

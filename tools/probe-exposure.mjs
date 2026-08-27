@@ -12,7 +12,7 @@
  *   clipped    < 3 %         (fraction of pixels at 250/255 or above)
  */
 import { chromium } from 'playwright';
-import { serve, CHROMIUM } from './static-server.mjs';
+import { serve, CHROMIUM, NAV_TIMEOUT } from './static-server.mjs';
 
 const PORT = 5197;
 const server = await serve( new URL( '../dist/', import.meta.url ).pathname, PORT );
@@ -21,12 +21,17 @@ const page = await browser.newPage( { viewport: { width: 480, height: 270 } } );
 
 page.on( 'pageerror', e => console.error( 'pageerror:', e.message ) );
 
-await page.goto( `http://localhost:${ PORT }/`, { waitUntil: 'load' } );
+await page.goto( `http://localhost:${ PORT }/`, { waitUntil: 'load', timeout: NAV_TIMEOUT } );
 await page.waitForFunction( () => globalThis.__GAME__ !== undefined, { timeout: 120000 } );
 
-await page.evaluate( () => {
+// `IBL=hdri` measures the embedded probe instead of the procedural sky, so the
+// two sources can be compared with the same instrument rather than by eye.
+const IBL = process.env.IBL ?? 'procedural';
+
+await page.evaluate( ( ibl ) => {
   document.getElementById( 'overlay' ).classList.add( 'hidden' );
   const g = globalThis.__GAME__;
+  g.environment.setIblSource( ibl );
   g.running = false;
   g.renderer.setQuality( 'low' );
   g.renderer.renderer.setPixelRatio( 1 );
@@ -57,7 +62,7 @@ await page.evaluate( () => {
       clipped: clipped / lumas.length,
     };
   };
-} );
+}, IBL );
 
 // Must match the 'courtyard' pose in shoot.mjs, so probe numbers and hero
 // screenshots describe the same frame.
@@ -80,6 +85,7 @@ async function measure( preset, exposure, envIntensity, sunIntensity, hemi ) {
 const fmt = n => n.toFixed( 3 ).padStart( 6 );
 const pct = n => ( n * 100 ).toFixed( 1 ).padStart( 5 ) + '%';
 
+console.log( `IBL source: ${ IBL }` );
 console.log( 'preset       exp    env    sun   hemi |   mean    p05    p50    p95  clipped' );
 console.log( '-'.repeat( 80 ) );
 

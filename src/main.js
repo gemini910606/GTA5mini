@@ -184,11 +184,19 @@ class Game {
     if ( input.wasPressed( 'Digit3' ) ) this.setQuality( 'high' );
 
     if ( input.wasPressed( 'KeyT' ) ) this.cycleTimeOfDay();
+    if ( input.wasPressed( 'KeyH' ) ) this.cycleIblSource();
   }
 
   setQuality( name ) {
     this.renderer.setQuality( name );
     return name;
+  }
+
+  /** Flips IBL between the procedural sky and the embedded HDRI probe. */
+  cycleIblSource() {
+    const next = this.environment.cycleIblSource();
+    this.updateHud();
+    return next;
   }
 
   cycleTimeOfDay() {

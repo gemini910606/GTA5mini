@@ -283,6 +283,7 @@ body {
       <dt>F</dt><dd>Flashlight</dd>
       <dt>1 / 2 / 3</dt><dd>Quality</dd>
       <dt>T</dt><dd>Time of day</dd>
+      <dt>H</dt><dd>IBL source</dd>
       <dt>Esc</dt><dd>Release mouse</dd>
     </dl>
   </div>
