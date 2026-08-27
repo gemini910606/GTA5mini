@@ -191,13 +191,16 @@
 - [ ] 碰撞盒由 JSON 推導，不得手寫第二份
 - [ ] JSON schema 寫進 `docs/SPEC.md`
 
-### T-14  單檔打包
-**目標** `npm run bundle:single` 產出單一 HTML，可離線開啟、可當附件傳。
+### ~~T-14  單檔打包~~ — 已撤銷
 
-**主要檔案** 新增 `tools/build-singlefile.mjs`
-**專屬驗收**
-- [ ] 產出檔 ≤ 16 MB，`file://` 直接開啟可玩
-- [ ] 無任何外部請求（用 devtools network 面板驗證，附截圖）
+實作過（`npm run artifact`），後來整個移除。
+
+單檔打包的前提是「零外部請求」，而專案決定改用外部素材（CDN 上的模型與貼圖）。
+兩者無法並存：一旦素材要下載，產出的就不是可離線開啟的單一檔案，
+守著它的 `check-artifact.mjs` 也只會變成一個大家學會忽略的紅燈。
+
+**不要重做這張 ticket**，除非「零外部請求」重新成為專案目標。
+歷史實作見 git log 中的 `build-artifact.mjs` 與 `check-artifact.mjs`。
 
 ---
 
