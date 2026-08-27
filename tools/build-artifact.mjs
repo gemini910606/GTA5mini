@@ -3,13 +3,55 @@
  *
  * The page is authored as body content only (no doctype/html/head/body), which
  * is what the Artifact publisher wraps. Everything — three.js, the game, every
- * texture — is either inline or generated at runtime, so the page makes zero
- * network requests apart from the Google Fonts stylesheet.
+ * texture, every font — is either inline or generated at runtime, so the page
+ * makes no network requests at all.
  */
 import { readFile, writeFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const DIST = new URL( '../dist/', import.meta.url ).pathname;
+const FONTS = new URL( './fonts/', import.meta.url ).pathname;
+
+/**
+ * The faces the page actually uses, in the latin subset only: the UI's CJK
+ * text has always fallen back to system fonts, and bundling a CJK subset would
+ * cost more than the rest of the page put together. Google Fonts serves IBM
+ * Plex Sans as one variable file, so three weights share a single download.
+ * See tools/fonts/LICENSE.txt for provenance and the OFL terms.
+ */
+const FACES = [
+  [ 'Archivo Black', '400', 'archivo-black-400.woff2' ],
+  [ 'IBM Plex Mono', '400', 'ibm-plex-mono-400.woff2' ],
+  [ 'IBM Plex Mono', '500', 'ibm-plex-mono-500.woff2' ],
+  [ 'IBM Plex Mono', '600', 'ibm-plex-mono-600.woff2' ],
+  // A weight *range*, not three rules: one variable file covers 400-600, and
+  // repeating it per weight would embed the same 45 KB three times.
+  [ 'IBM Plex Sans', '400 600', 'ibm-plex-sans-var.woff2' ],
+];
+
+// Matches what the Google Fonts CDN declares for its latin subset, so glyphs
+// outside it keep falling back exactly as they did before the fonts moved
+// in-page (the → and ▸ in the title card were never in this range).
+const LATIN = 'U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, '
+  + 'U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, '
+  + 'U+2193, U+2212, U+2215, U+FEFF, U+FFFD';
+
+// Read each distinct file once; the variable face is referenced three times.
+const fontData = new Map();
+for ( const [ , , file ] of FACES ) {
+  if ( ! fontData.has( file ) ) {
+    fontData.set( file, ( await readFile( join( FONTS, file ) ) ).toString( 'base64' ) );
+  }
+}
+
+const fontCss = FACES.map( ( [ family, weight, file ] ) => `@font-face {
+  font-family: '${ family }';
+  font-style: normal;
+  font-weight: ${ weight };
+  font-display: swap;
+  src: url(data:font/woff2;base64,${ fontData.get( file ) }) format('woff2');
+  unicode-range: ${ LATIN };
+}` ).join( '\n' );
 const out = process.argv[ 2 ];
 if ( ! out ) throw new Error( 'usage: build-artifact.mjs <output.html>' );
 
@@ -21,12 +63,22 @@ const js = await readFile( join( DIST, 'assets', jsName ), 'utf8' );
 // A literal </script> anywhere in the bundle would close the tag early.
 const safeJs = js.replaceAll( '</script', '<\\/script' );
 
-const page = String.raw`<title>GTA5mini</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+// Must be the first bytes on the page. The inlined fonts push the first
+// non-ASCII character (the → in the pipeline strip) past offset 148000, far
+// beyond the 1024-byte window the encoding prescan reads, so without an
+// explicit declaration the browser falls back to latin-1 and every arrow, dot
+// and em dash renders as mojibake. Entities would not be enough on their own:
+// the bundle carries a non-ASCII character inside <script>, where they do not
+// decode.
+const page = String.raw`<meta charset="utf-8">
+<title>GTA5mini</title>
+<!-- Same mark as index.html. Without it the browser probes /favicon.ico and
+     the page's first act is a failed request. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230b0e13'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%23e8eef5' stroke-width='2'/%3E%3Cpath d='M16 3v7M16 22v7M3 16h7M22 16h7' stroke='%23e8eef5' stroke-width='2'/%3E%3C/svg%3E">
 
 <style>
+${ fontCss }
+
 /* ---------------------------------------------------------------------------
    Palette is taken from the scene itself: the courtyard's emissive sign is
    #ff5a3c and its light strips are #4fc3f7. Committed dark — this is a game

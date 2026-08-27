@@ -44,8 +44,11 @@ await page.evaluate( () => { globalThis.__GAME__.renderer.setQuality( 'low' ); }
 await page.waitForTimeout( 2500 );
 await page.screenshot( { path: 'shots/artifact-playing.png' } );
 
-const external = [ ...new Set( requests ) ].filter( u => ! u.includes( 'fonts.googleapis' ) && ! u.includes( 'fonts.gstatic' ) );
-console.log( 'external requests (excluding Google Fonts):', external.length ? external : 'none' );
+// No whitelist: the page inlines its own fonts, so any request leaving the
+// document is a regression in the packaging, not an accepted cost.
+const external = [ ...new Set( requests ) ];
+console.log( 'external requests:', external.length ? external : 'none' );
+if ( external.length ) errors.push( 'fetched outside the document:\n  ' + external.join( '\n  ' ) );
 
 await browser.close();
 server.close();
