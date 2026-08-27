@@ -1,7 +1,25 @@
 import { chromium } from 'playwright';
 import { serve, CHROMIUM } from './static-server.mjs';
+import { stat, mkdtemp, copyFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-const root = process.argv[ 2 ];
+/**
+ * Takes the artifact HTML itself, or a directory to serve. `npm run artifact`
+ * writes one loose file while the server needs a directory with an index.html
+ * in it, so the file case is staged into a temp directory here rather than
+ * making every caller do it by hand.
+ */
+const target = process.argv[ 2 ] ?? 'dist-single.html';
+let root = target;
+let staged = null;
+
+if ( ( await stat( target ) ).isFile() ) {
+  staged = await mkdtemp( join( tmpdir(), 'gta5mini-artifact-' ) );
+  await copyFile( target, join( staged, 'index.html' ) );
+  root = staged;
+}
+
 const server = await serve( root, 5196 );
 const browser = await chromium.launch( CHROMIUM );
 const page = await browser.newPage( { viewport: { width: 1100, height: 620 } } );
@@ -52,5 +70,6 @@ if ( external.length ) errors.push( 'fetched outside the document:\n  ' + extern
 
 await browser.close();
 server.close();
+if ( staged ) await rm( staged, { recursive: true, force: true } );
 console.log( errors.length ? 'ERRORS:\n' + errors.join( '\n' ) : 'no console errors' );
 process.exit( errors.length ? 1 : 0 );

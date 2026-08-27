@@ -43,11 +43,15 @@ npm run dev
 ## 單檔打包
 
 ```bash
-npm run artifact     # 產出 dist-single.html
+npm run artifact         # 產出 dist-single.html
+npm run check:artifact   # 打包後用無頭瀏覽器驗證（開機、點擊接手、零外部請求）
 ```
 
-把整個遊戲（含 three.js）內嵌成一個約 0.7 MB 的 HTML，
+把整個遊戲（含 three.js 與字體）內嵌成一個約 0.84 MB 的 HTML，
 `file://` 直接開啟即可玩，零網路請求。適合當附件寄出或丟進任何靜態空間。
+
+`check:artifact` 會在任何離開該文件的請求出現時失敗，
+所以「零網路請求」是被測試守住的，不是寫在這裡的宣稱。
 
 在無法取得 pointer lock 的環境（iframe 內嵌、部分文件檢視器），
 會自動退回「按住滑鼠拖曳轉視角」模式。
