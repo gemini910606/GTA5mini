@@ -55,6 +55,26 @@ const SCAN_SWEEP = Math.PI * 40 / 180; // ±40° either side of where it lost in
  */
 const LOS_INTERVAL = 0.08;
 
+/**
+ * How long the sound of a fight stays worth investigating, and how vaguely it
+ * is located.
+ *
+ * Reinforcements used to be handed the player's exact position so the arena
+ * would not go quiet — and from the player's side that reads as exactly the
+ * omniscience the vision cone was meant to remove: a spawn across the map
+ * walking a straight line to where you are standing.
+ *
+ * They now head for the last commotion instead: gunfire, or a body dropping.
+ * Stay quiet and they have nowhere to go. Shoot and you tell them roughly
+ * where you are, which is a mechanic rather than a cheat.
+ */
+const COMMOTION_MEMORY = 14;
+const COMMOTION_SPREAD = 0.32;   // fraction of the distance to it, as scatter
+const COMMOTION_SPREAD_MIN = 5;
+const COMMOTION_SPREAD_MAX = 18;
+
+const _rumour = new THREE.Vector3();
+
 /** Signed shortest angular difference, in (-π, π]. */
 function wrapAngle( a ) {
   return a - Math.PI * 2 * Math.floor( ( a + Math.PI ) / ( Math.PI * 2 ) );
@@ -253,6 +273,7 @@ class Enemy {
       // enemy should advance the wave and the score, not just the one damage
       // path that happens to exist today.
       this.manager.kills ++;
+      this.manager.noteCommotion( this.position );
       this.manager.onDeath?.( this );
       return { killed: true, damage: dealt, headshot };
     }
@@ -570,6 +591,10 @@ export class EnemyManager {
     this.kills = 0;
     this._spawnCursor = 0;
     this.onEnemyFire = null;
+
+    /** Where the last noticeable noise came from, and how long ago. */
+    this.commotion = new THREE.Vector3();
+    this.commotionAge = Infinity;
     /** `( enemy ) => void`, fired once as an enemy finishes dying. */
     this.onDeath = null;
     /**
@@ -578,6 +603,32 @@ export class EnemyManager {
      * on its own.
      */
     this.autoRespawn = true;
+  }
+
+  /** Records a noise worth walking towards: a shot, or a body hitting the floor. */
+  noteCommotion( position ) {
+    this.commotion.copy( position );
+    this.commotionAge = 0;
+  }
+
+  /**
+   * A scattered guess at the commotion, or null if it is stale.
+   *
+   * The error grows with how far away the listener is — someone across the
+   * arena has a direction, someone nearby has a place — so nobody arrives on
+   * the exact spot and everybody still converges on the fight.
+   */
+  _rumourFor( from ) {
+    if ( this.commotionAge > COMMOTION_MEMORY ) return null;
+    const spread = Math.min( COMMOTION_SPREAD_MAX,
+      Math.max( COMMOTION_SPREAD_MIN, from.distanceTo( this.commotion ) * COMMOTION_SPREAD ) );
+    const angle = Math.random() * Math.PI * 2;
+    const radius = Math.sqrt( Math.random() ) * spread;   // uniform over the disc
+    return _rumour.set(
+      this.commotion.x + Math.cos( angle ) * radius,
+      this.commotion.y,
+      this.commotion.z + Math.sin( angle ) * radius,
+    );
   }
 
   /** Enemies currently deployed and not yet dead. */
@@ -607,6 +658,7 @@ export class EnemyManager {
     }
     this.kills = 0;
     this._spawnCursor = 0;
+    this.commotionAge = Infinity;
   }
 
   /** Raycast targets — every hitbox mesh of every living enemy. */
@@ -631,15 +683,16 @@ export class EnemyManager {
       const p = points[ ( this._spawnCursor + attempt ) % points.length ];
       if ( awayFrom && p.distanceTo( awayFrom ) < minDistance ) continue;
       this._spawnCursor = ( this._spawnCursor + attempt + 1 ) % points.length;
-      e.spawn( p, awayFrom );
+      e.spawn( p, this._rumourFor( p ) );
       return e;
     }
     // Every point was too close; take the first anyway rather than stall.
-    e.spawn( points[ 0 ], awayFrom );
+    e.spawn( points[ 0 ], this._rumourFor( points[ 0 ] ) );
     return e;
   }
 
   update( dt, ctx ) {
+    this.commotionAge += dt;
     for ( const e of this.enemies ) {
       const result = e.update( dt, { ...ctx, level: this.level, onEnemyFire: this.onEnemyFire } );
       if ( result === 'respawn' && this.autoRespawn ) this.spawnOne( ctx.playerPosition );

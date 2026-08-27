@@ -77,8 +77,13 @@ class Game {
 
   _buildFlashlight() {
     this.flashlight = new THREE.SpotLight( 0xfff0d8, 0, 40, Math.PI / 8, 0.45, 1.6 );
-    this.flashlight.position.set( 0.1, -0.06, 0 );
-    this.flashlight.target.position.set( 0, 0, -1 );
+    // Mounted past the muzzle, not at the eye. The viewmodel occupies camera-
+    // local z from -0.13 to -0.92, so a light at the origin sits behind the gun
+    // and floods it — invisible at the hip, but aiming pulls the weapon to
+    // centre and it washes out completely. A real weapon light is on the
+    // barrel, ahead of everything it would otherwise illuminate.
+    this.flashlight.position.set( 0.1, -0.06, -1.05 );
+    this.flashlight.target.position.set( 0, 0, -20 );
     this.camera.add( this.flashlight );
     this.camera.add( this.flashlight.target );
     this.flashlightOn = false;
@@ -125,6 +130,9 @@ class Game {
     this.weapon.onFire = ( origin, direction ) => {
       // Slight per-shot detune, or a held trigger sounds like one looping sample.
       this.audio.play( 'shot', { volume: 0.85, rate: 0.96 + Math.random() * 0.08 } );
+      // Firing is what tells reinforcements where to look. Staying quiet keeps
+      // them wandering.
+      this.enemies.noteCommotion( this.camera.position );
       this._hitscan( origin, direction );
     };
 
