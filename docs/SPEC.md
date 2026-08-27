@@ -188,6 +188,8 @@ npm run shots          # headless Chromium 截圖 + smoke test，任何 console 
 | `materials` | 名稱 → 材質定義（見下） |
 | `elements` | 元素陣列，依序建立 |
 | `spawnPoints` | `[x, y, z]` 陣列，敵人生成點 |
+| `playerStart` | `[x, y, z]`，玩家起點。省略時退回 `[0, 0, 26]`（arena 的南側入口） |
+| `attribution` / `source` | 由外部資料產生的關卡帶著來源與授權標示；引擎不讀，但必須隨檔案保留 |
 
 ### 材質
 
@@ -204,7 +206,12 @@ npm run shots          # headless Chromium 截圖 + smoke test，任何 console 
 
 `surface` 原封不動傳給 `makeSurface()`；`metalness` / `roughness` / `normalScale`
 覆寫在產出的貼圖之上。`pattern` 可省略，或用 `{ kind: "panel", cols, rows, groove?, offsetAlternate? }`
-與 `{ kind: "metal", ridges }`。
+與 `{ kind: "metal", ridges }`、`{ kind: "window", cols, rows, sill?, lit?, seed? }`。
+
+`window` 是給建築立面用的：把高度場推到兩極，讓 `makeSurface` 產出「暗玻璃 vs 亮牆」
+的反照率對比。`panel` 只切淺溝，五十公尺外整棟樓會讀成一塊白板。
+搭配元素的 `uvScale`，慣例是**一個貼圖單元 = 一層樓**（產生器用 3 公尺，`rows: 1`），
+於是 `cols` 直接讀作「每層樓幾扇窗」。
 
 `kind: "plain"` — 直接餵給 `MeshStandardMaterial`，`color` 與 `emissive`
 寫成十六進位字串（`"0x4fc3f7"`）。發光材質走這條。
@@ -216,15 +223,37 @@ npm run shots          # headless Chromium 截圖 + smoke test，任何 console 
 
 | `type` | 欄位 | 說明 |
 |---|---|---|
-| `box` | `material`, `size`, `pos`, `collide?`, `rotY?`, `cast?`, `receive?`, `name?` | 單一實心盒 |
+| `box` | `material`, `size`, `pos`, `collide?`, `rotY?`, `cast?`, `receive?`, `visible?`, `name?` | 單一實心盒 |
 | `ramp` | `material`, `base`, `width`, `height`, `run`, `steps?` | 階梯式斜坡，展開成 `steps` 個盒子 |
 | `instanced` | `material`, `geometry`, `transforms`, `colliderSize?`, `collide?`, `cast?` | 一個 `InstancedMesh`；`transforms` 是 `[x, y, z, rotY]` 陣列 |
+| `prisms` | `material`, `buildings`, `uvScale?`, `collide?`, `cast?`, `receive?`, `hittable?`, `name?` | 一組擠出的多邊形柱體，合併成**單一** `BufferGeometry` |
 | `pointLight` | `color`, `intensity`, `distance`, `decay`, `pos` | 點光源 |
 
 `geometry` 為 `{ kind: "box", size }` 或 `{ kind: "barrier" }`。
 
 `collide` 預設 `true`（`instanced` 需同時給 `colliderSize`），`cast` 與 `receive` 預設 `true`，
-`rotY` 與 `colliderSize` 預設 `0`。
+`visible` 與 `hittable` 預設 `true`，`rotY` 與 `colliderSize` 預設 `0`，`uvScale` 預設 `6`。
+
+`visible: false` 的 `box` 是邊界牆：擋住玩家但**不進 `hittables`**，
+否則對著天際線開槍會在空氣中打出火花。
+
+### `prisms`：一座城市的基本型
+
+`buildings` 的每一筆是 `{ h, ring }`，`ring` 是攤平的 `[x0, z0, x1, z1, …]` 底面多邊形，
+`h` 是高度（公尺，從地面算起）。這正是 PLATEAU LOD1 建築的資料形狀，
+所以轉換幾乎無損。
+
+幾何建在 `world/PrismGeometry.js`，**不在 `Level.js` 裡**：它只依賴 three 的數學，
+不碰 canvas 也不碰 WebGL，因此 `npm test` 可以無頭載入它檢查面的朝向。
+這件事非做不可 —— 纏繞方向反了的建築**看起來仍然是實心的**（近側的牆被背面剔除，
+你看到的是遠側牆的內面），第一版城市每一棟都是裡外顛倒的，靠眼睛完全看不出來。
+
+`uvScale` 是每個貼圖單元幾公尺；牆面的 U 沿周長累積、V 取高度，
+所以同一張貼圖貼在店面和辦公大樓上都不會被拉伸。底面不產生 —— 永遠看不到，
+而且佔三分之一的三角形。
+
+碰撞取底面的 AABB 而不是多邊形本身：一個街廓夠接近它的包圍盒，
+遊戲中看不出差別，而碰撞求解器本來也只吃盒子。
 
 旋轉的 instanced 物件用保守 AABB：半徑取 `colliderSize / 2 × √2`，
 也就是用對角線而不是邊長，否則轉 45° 的箱子會有角落穿出碰撞盒。
@@ -237,3 +266,17 @@ npm run shots          # headless Chromium 截圖 + smoke test，任何 console 
 攤平之後，第二張關卡不需要動任何程式碼。
 
 代價是 `arena.json` 約 35 KB，其中大半是那 216 筆座標。這是資料，不是程式碼。
+
+### 碰撞的粗篩（`world/Colliders.js`）
+
+arena 的 54 個碰撞盒可以線性掃描：每個實體、每軸、每個 substep，120 Hz。
+一個東京街廓是 147 個，掃描就變成全部的成本，所以碰撞盒進 XZ 平面的均勻網格。
+建築又高又細，垂直軸切格子毫無幫助，盒子測試本來就處理得了。
+
+網格在關卡載入時建一次。查詢**不配置任何記憶體**：CSR 佈局是扁平的 typed array，
+「這個盒子這次查過了」用的是每次查詢遞增的 stamp 陣列，不是 `Set`。
+
+`level.colliders` 陣列仍然是唯一真相，網格只是它的索引。
+`Colliders` 同時保留線性版的 `firstLinear` / `blockedLinear`，
+`npm test` 拿兩者互相比對 —— DDA 走格子很容易寫出微妙的錯，
+而錯的後果是敵人隔牆看到你，那在畫面上是看不見的。

@@ -1,6 +1,7 @@
 # GTA5mini
 
 瀏覽器內的 three.js 第一人稱射擊原型。**零安裝、零外部資產請求。**
+地圖是真的東京——新宿三個街廓，來自國土交通省的 Project PLATEAU 開放資料。
 
 這個 repo 想回答一個具體的問題：
 
@@ -62,6 +63,8 @@ npm run dev
 **工程**
 - 固定步長 120 Hz 模擬，與渲染解耦
 - 全部貼圖程序生成（tileable fBm + Sobel 法線）
+- 四張地圖，遊戲內 `M` 鍵切換：一張練習場，三張真實的新宿街廓
+- 碰撞用均勻網格粗篩，查詢零配置；無頭測試拿它跟線性掃描逐一比對
 - Headless Chromium 截圖 harness，兼作 smoke test
 - 曝光參數掃描工具（讀 `gl.readPixels` 算 luma 分位數）
 
@@ -89,14 +92,20 @@ npm run dev
 
 程式碼 MIT。
 
-美術資產幾乎全部程序生成——所有貼圖、幾何、天空都是執行期算出來的。
-唯一的例外是內嵌的 IBL 探針：
+所有貼圖、天空和練習場的幾何都是程序生成，執行期算出來的。有兩項外部資料，
+兩項都在 build 前轉檔並進版控，**執行期一樣不發任何請求**：
 
 - **Cedar Bridge Sunset 1** — 作者 Dario Barresi，來自 [Poly Haven](https://polyhaven.com/a/cedar_bridge_sunset_1)，
   授權 CC0（不要求署名，仍然註明）。降採樣到 256×128 後以 base64 內嵌於
   `src/world/hdri.generated.js`，用 `node tools/build-hdri.mjs` 重新產生。
 
-它是**內嵌**而不是下載的——build 時就烘進 bundle，執行期不發任何請求。
+- **3D 都市モデル（Project PLATEAU）** — 國土交通省。
+  三張新宿地圖（歌舞伎町一丁目、新宿一丁目、大京町）是從東京都 23 區的
+  LOD1 建築模型（`plateau-tokyo23ku-obj4-2020`，EPSG:6677）裁切轉出的，
+  用 `node tools/build-plateau.mjs` 重新產生。
+  PLATEAU 的資料[任何人都可免費自由使用，包含商用](https://www.mlit.go.jp/plateau/site-policy/)。
+  原始壓縮檔 600 MB，不在 repo 裡；工具檔頭寫了下載方式。
+  每張關卡 JSON 自己帶著 `attribution` 與 `source` 欄位。
 
 （單檔打包與守著它的 `check:artifact` 已經移除，見 `docs/TASKS.md` 的 T-14。
 內嵌這件事本身沒變，但「零網路請求」現在沒有測試在把關了。）
