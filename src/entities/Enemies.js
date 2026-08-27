@@ -13,6 +13,28 @@ import * as THREE from 'three';
 const MAX_ENEMIES = 8;
 const RESPAWN_DELAY = 2.6;
 
+/**
+ * Where the weapon sits in enemy-local space. Tracers and the line-of-sight
+ * test must start from the same point, or an enemy can be denied a shot the
+ * player watched it take.
+ */
+const MUZZLE = [ 0.30, 1.14, -0.48 ];
+
+/**
+ * How long a blocked enemy waits before testing again.
+ *
+ * Without this the fire timer would sit expired behind cover and discharge the
+ * instant the player leans out, which punishes peeking harder than the old
+ * shoot-through-walls behaviour did. This doubles as a crude reaction time.
+ */
+const BLOCKED_RECHECK = 0.35;
+
+// Scratch vectors: the sight test runs on the update path and must not allocate.
+const _ray = new THREE.Ray();
+const _from = new THREE.Vector3();
+const _dir = new THREE.Vector3();
+const _hit = new THREE.Vector3();
+
 const PALETTE = [
   { body: 0x2f3a4a, accent: 0xd94f3d },
   { body: 0x3d3a32, accent: 0xe0a02c },
@@ -220,11 +242,52 @@ class Enemy {
     // --- Shooting ------------------------------------------------------------
     this._fireTimer -= dt;
     if ( this._fireTimer <= 0 && distance < 34 ) {
-      this._fireTimer = 1.4 + Math.random() * 1.6;
-      ctx.onEnemyFire?.( this, distance );
+      if ( this.canSee( playerPosition, level ) ) {
+        this._fireTimer = 1.4 + Math.random() * 1.6;
+        ctx.onEnemyFire?.( this, distance );
+      } else {
+        this._fireTimer = BLOCKED_RECHECK;
+      }
     }
 
     return null;
+  }
+
+  /** World position of the weapon muzzle — where tracers and sight both start. */
+  muzzleWorld( target = new THREE.Vector3() ) {
+    return this.group.localToWorld( target.set( MUZZLE[ 0 ], MUZZLE[ 1 ], MUZZLE[ 2 ] ) );
+  }
+
+  /**
+   * Can this enemy actually see `target`?
+   *
+   * Tests the muzzle-to-eye segment against the level's collider boxes — the
+   * same world the player collides with, so anything that stops the player
+   * stops a bullet. Enemies previously rolled to hit on distance alone and
+   * shot straight through walls, which made every piece of cover in the level
+   * decorative for one side of the fight and real for the other.
+   *
+   * Colliders rather than `hittables`: railings, window glass and roof
+   * parapets are deliberately non-colliding, and none of them should grant
+   * cover the player cannot also stand behind.
+   */
+  canSee( target, level ) {
+    const from = this.muzzleWorld( _from );
+    _dir.subVectors( target, from );
+    const range = _dir.length();
+    if ( range < 1e-4 ) return true;
+
+    _ray.set( from, _dir.divideScalar( range ) );
+
+    for ( const box of level.colliders ) {
+      // A box the muzzle is already inside cannot occlude this shot — an enemy
+      // clipped into a barrier would otherwise be permanently blind.
+      if ( box.containsPoint( from ) ) continue;
+      if ( _ray.intersectBox( box, _hit ) && _hit.distanceToSquared( from ) < range * range ) {
+        return false;
+      }
+    }
+    return true;
   }
 
   _updateDead( dt, ctx ) {
