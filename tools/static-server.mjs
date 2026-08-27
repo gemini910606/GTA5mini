@@ -35,6 +35,19 @@ export async function serve( root, port ) {
 }
 
 /**
+ * Navigation timeout for every harness here.
+ *
+ * They all already allow 120s for the game to signal ready, but `page.goto`
+ * was left on Playwright's 30s default, which is a different budget for the
+ * same slow boot. Under SwiftShader the load event scales with viewport area
+ * -- measured 7.8s at 640x360, 14.3s at 1100x620, 19.0s at 1280x720 -- so the
+ * widest harness clears 30s on a runner only modestly slower than a dev box,
+ * and fails with a bare navigation timeout that reads like a hang rather than
+ * like "software rendering is slow". Matching the two budgets removes that.
+ */
+export const NAV_TIMEOUT = 120000;
+
+/**
  * Launch options for every headless harness here: SwiftShader software GL,
  * because neither the dev container nor a CI runner has a GPU.
  *

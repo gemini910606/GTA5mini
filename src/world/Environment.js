@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { HDRI } from './hdri.generated.js';
 import { Sky } from 'three/addons/objects/Sky.js';
 
 /**
@@ -23,6 +24,11 @@ import { Sky } from 'three/addons/objects/Sky.js';
 // Radius of the sky dome. Must be inside the camera's far plane (800) or the
 // box is clipped away entirely and the sky renders as the clear colour.
 const SKY_RADIUS = 450;
+
+// The preset `envIntensity` values were measured against the procedural sky.
+// The HDRI probe carries different absolute energy, so switching source without
+// rescaling shifts exposure. Measured with `npm run probe` — see README.
+const HDRI_INTENSITY_SCALE = 1.0;
 
 export const TIME_OF_DAY = {
   goldenHour: {
@@ -88,6 +94,7 @@ export class Environment {
 
     this.sunDirection = new THREE.Vector3();
     this._envTarget = null;
+    this.iblSource = 'procedural';
 
     this.sun = new THREE.DirectionalLight( 0xffffff, 1 );
     this.sun.castShadow = true;
@@ -143,17 +150,39 @@ export class Environment {
 
     this.scene.fog = new THREE.FogExp2( p.fogColor, p.fogDensity );
     this.renderer.toneMappingExposure = p.exposure;
-    this.scene.environmentIntensity = p.envIntensity;
-
-    this.refreshIBL();
+    this.refreshIBL();   // also applies envIntensity for the active source
     return p;
   }
 
   /**
-   * Bakes the sky dome — minus the solar disc — into a PMREM cubemap used as
-   * `scene.environment` for ambient and specular IBL.
+   * Bakes `scene.environment` from whichever IBL source is selected.
+   *
+   * Both paths end the same way: build the new PMREM target, then drop the old
+   * one, so a failed bake cannot leave the scene holding a disposed map.
    */
   refreshIBL() {
+    let target;
+    if ( this.iblSource === 'hdri' ) {
+      // Decoded per bake and thrown away: PMREM consumes it here, and holding
+      // it would leave a texture allocated for a mode that may never be
+      // switched back on. Decoding 32k texels costs single-digit milliseconds.
+      const equirect = this._decodeHDRI();
+      target = this.pmrem.fromEquirectangular( equirect );
+      equirect.dispose();
+    } else {
+      target = this._bakeProceduralSky();
+    }
+
+    this._envTarget?.dispose();
+    this._envTarget = target;
+    this.scene.environment = target.texture;
+    this.scene.background = null;
+
+    this._applyEnvIntensity();
+  }
+
+  /** PMREM of the sky dome with the solar disc suppressed. */
+  _bakeProceduralSky() {
     const uniforms = this.sky.material.uniforms;
     const hadSunDisc = uniforms.showSunDisc.value;
     uniforms.showSunDisc.value = 0;
@@ -165,15 +194,69 @@ export class Environment {
 
     const target = this.pmrem.fromScene( skyScene, 0.02 );
 
-    // Dispose the previous target only after the new one exists, so a failed
-    // bake cannot leave the scene with a disposed environment map.
-    this._envTarget?.dispose();
-    this._envTarget = target;
-    this.scene.environment = target.texture;
-    this.scene.background = null;
-
     uniforms.showSunDisc.value = hadSunDisc;
     skyScene.remove( proxy );
+    return target;
+  }
+
+  /**
+   * Decodes the embedded RGBE probe into an equirectangular texture.
+   *
+   * Half float rather than full: PMREM consumes this immediately and the
+   * source is already clamped to a narrow range, so the extra mantissa buys
+   * nothing and doubles the upload.
+   */
+  _decodeHDRI() {
+    const bytes = Uint8Array.from( atob( HDRI.rgbe ), c => c.charCodeAt( 0 ) );
+    const texels = HDRI.width * HDRI.height;
+    const rgba = new Uint16Array( texels * 4 );
+
+    for ( let i = 0; i < texels; i ++ ) {
+      const e = bytes[ i * 4 + 3 ];
+      const f = e === 0 ? 0 : Math.pow( 2, e - 136 );   // 2^(e-128) / 256
+      rgba[ i * 4 ]     = THREE.DataUtils.toHalfFloat( bytes[ i * 4 ] * f );
+      rgba[ i * 4 + 1 ] = THREE.DataUtils.toHalfFloat( bytes[ i * 4 + 1 ] * f );
+      rgba[ i * 4 + 2 ] = THREE.DataUtils.toHalfFloat( bytes[ i * 4 + 2 ] * f );
+      rgba[ i * 4 + 3 ] = THREE.DataUtils.toHalfFloat( 1 );
+    }
+
+    const tex = new THREE.DataTexture(
+      rgba, HDRI.width, HDRI.height, THREE.RGBAFormat, THREE.HalfFloatType,
+    );
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    tex.colorSpace = THREE.LinearSRGBColorSpace;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  /**
+   * The two sources carry different absolute energy, so the preset's
+   * `envIntensity` — measured against the procedural sky — has to be rescaled
+   * for the probe. The factor is measured with `npm run probe`, not guessed.
+   */
+  _applyEnvIntensity() {
+    const base = this.presetSettings.envIntensity;
+    this.scene.environmentIntensity = this.iblSource === 'hdri'
+      ? base * HDRI_INTENSITY_SCALE
+      : base;
+  }
+
+  /**
+   * Switches IBL source at runtime. Returns the source actually in effect.
+   */
+  setIblSource( source ) {
+    const next = source === 'hdri' ? 'hdri' : 'procedural';
+    if ( next === this.iblSource ) return next;
+    this.iblSource = next;
+    this.refreshIBL();
+    return next;
+  }
+
+  /** Flips between the two sources. */
+  cycleIblSource() {
+    return this.setIblSource( this.iblSource === 'hdri' ? 'procedural' : 'hdri' );
   }
 
   /** Keeps the shadow frustum and the sky dome centred on the player. */

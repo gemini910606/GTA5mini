@@ -38,20 +38,8 @@ npm run dev
 | `F` | 手電筒 |
 | `1` `2` `3` | 畫質：低 / 中 / 高 |
 | `T` | 切換時段（黃昏 / 正午 / 日落）|
+| `H` | 切換環境光來源（程序天空 / HDRI 探針）|
 | `Esc` | 釋放滑鼠 |
-
-## 單檔打包
-
-```bash
-npm run artifact         # 產出 dist-single.html
-npm run check:artifact   # 打包後用無頭瀏覽器驗證（開機、點擊接手、零外部請求）
-```
-
-把整個遊戲（含 three.js 與字體）內嵌成一個約 0.84 MB 的 HTML，
-`file://` 直接開啟即可玩，零網路請求。適合當附件寄出或丟進任何靜態空間。
-
-`check:artifact` 會在任何離開該文件的請求出現時失敗，
-所以「零網路請求」是被測試守住的，不是寫在這裡的宣稱。
 
 在無法取得 pointer lock 的環境（iframe 內嵌、部分文件檢視器），
 會自動退回「按住滑鼠拖曳轉視角」模式。
@@ -99,4 +87,16 @@ npm run check:artifact   # 打包後用無頭瀏覽器驗證（開機、點擊�
 
 ## 授權
 
-程式碼 MIT。無第三方美術資產——全部程序生成。
+程式碼 MIT。
+
+美術資產幾乎全部程序生成——所有貼圖、幾何、天空都是執行期算出來的。
+唯一的例外是內嵌的 IBL 探針：
+
+- **Cedar Bridge Sunset 1** — 作者 Dario Barresi，來自 [Poly Haven](https://polyhaven.com/a/cedar_bridge_sunset_1)，
+  授權 CC0（不要求署名，仍然註明）。降採樣到 256×128 後以 base64 內嵌於
+  `src/world/hdri.generated.js`，用 `node tools/build-hdri.mjs` 重新產生。
+
+它是**內嵌**而不是下載的——build 時就烘進 bundle，執行期不發任何請求。
+
+（單檔打包與守著它的 `check:artifact` 已經移除，見 `docs/TASKS.md` 的 T-14。
+內嵌這件事本身沒變，但「零網路請求」現在沒有測試在把關了。）

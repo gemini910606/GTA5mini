@@ -168,3 +168,72 @@ npm run shots          # headless Chromium 截圖 + smoke test，任何 console 
 
 `globalThis.__GAME__` 暴露整個 Game 實例，`poseCamera()` 可在無 pointer lock 的情況下擺鏡頭 ——
 這是自動化驗證的掛鉤點，不要移除。
+
+---
+
+## 11. 關卡格式（`world/levels/*.json`）
+
+`Level.js` 不含任何關卡幾何，只是一個直譯器。場景描述在 JSON 裡，
+預設載入 `world/levels/arena.json`；`new Level( data )` 可傳入其他關卡。
+
+**碰撞盒不在 JSON 裡。** 每個 `collide` 的元素在建好 mesh 之後自行推導
+`THREE.Box3`。JSON 裡再寫一份碰撞資料，就是保證它遲早跟幾何對不上。
+
+### 頂層
+
+| 欄位 | 說明 |
+|---|---|
+| `name` | 關卡名稱 |
+| `ground` | `{ material, size }` — 一張 `size × size` 的水平平面 |
+| `materials` | 名稱 → 材質定義（見下） |
+| `elements` | 元素陣列，依序建立 |
+| `spawnPoints` | `[x, y, z]` 陣列，敵人生成點 |
+
+### 材質
+
+`kind: "surface"` — 程序生成貼圖：
+
+```json
+{ "kind": "surface",
+  "surface": { "size": 512, "tint": [0.52,0.34,0.28], "contrast": 0.34,
+               "roughBase": 0.86, "roughVar": 0.16, "bump": 2.1,
+               "period": 12, "repeat": 5, "seed": 21,
+               "pattern": { "kind": "panel", "cols": 16, "rows": 3, "groove": 0.03 } },
+  "metalness": 0.0, "normalScale": [1.4, 1.4] }
+```
+
+`surface` 原封不動傳給 `makeSurface()`；`metalness` / `roughness` / `normalScale`
+覆寫在產出的貼圖之上。`pattern` 可省略，或用 `{ kind: "panel", cols, rows, groove?, offsetAlternate? }`
+與 `{ kind: "metal", ridges }`。
+
+`kind: "plain"` — 直接餵給 `MeshStandardMaterial`，`color` 與 `emissive`
+寫成十六進位字串（`"0x4fc3f7"`）。發光材質走這條。
+
+### 元素
+
+所有元素都是**通用基本型**，沒有為特定關卡開的特例。座標單位是公尺，
+`pos` 是盒子中心，`rotY` 是弧度。
+
+| `type` | 欄位 | 說明 |
+|---|---|---|
+| `box` | `material`, `size`, `pos`, `collide?`, `rotY?`, `cast?`, `receive?`, `name?` | 單一實心盒 |
+| `ramp` | `material`, `base`, `width`, `height`, `run`, `steps?` | 階梯式斜坡，展開成 `steps` 個盒子 |
+| `instanced` | `material`, `geometry`, `transforms`, `colliderSize?`, `collide?`, `cast?` | 一個 `InstancedMesh`；`transforms` 是 `[x, y, z, rotY]` 陣列 |
+| `pointLight` | `color`, `intensity`, `distance`, `decay`, `pos` | 點光源 |
+
+`geometry` 為 `{ kind: "box", size }` 或 `{ kind: "barrier" }`。
+
+`collide` 預設 `true`（`instanced` 需同時給 `colliderSize`），`cast` 與 `receive` 預設 `true`，
+`rotY` 與 `colliderSize` 預設 `0`。
+
+旋轉的 instanced 物件用保守 AABB：半徑取 `colliderSize / 2 × √2`，
+也就是用對角線而不是邊長，否則轉 45° 的箱子會有角落穿出碰撞盒。
+
+### 為什麼窗戶是 108 筆 transform 而不是迴圈
+
+外牆的窗戶原本由 `4 面 × 3 層 × 9 開間` 的迴圈生成。改成資料驅動之後，
+那些迴圈變成 JSON 裡展開的 transform 陣列 —— 因為它們對應的**執行期結構**
+本來就是一個 `InstancedMesh`。把生成規則留在引擎裡，等於為這張關卡開特例；
+攤平之後，第二張關卡不需要動任何程式碼。
+
+代價是 `arena.json` 約 35 KB，其中大半是那 216 筆座標。這是資料，不是程式碼。

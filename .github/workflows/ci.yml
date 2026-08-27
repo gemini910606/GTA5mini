@@ -32,19 +32,6 @@ jobs:
       - name: Boot check
         run: npm run boot
 
-      # Packages the single-file artifact and asserts it boots, hands the title
-      # card over to the HUD on click, and fetches nothing outside itself.
-      - name: Artifact check
-        run: npm run check:artifact
-
-      - name: Upload artifact
-        if: success()
-        uses: actions/upload-artifact@v5
-        with:
-          name: dist-single
-          path: dist-single.html
-          if-no-files-found: error
-
       # Headless render failures are near-impossible to read from logs alone.
       - name: Upload screenshots on failure
         if: failure()
@@ -53,3 +40,50 @@ jobs:
           name: failure-screenshots
           path: shots/*.png
           if-no-files-found: ignore
+
+  # Split out rather than appended to `verify`: it is by far the slowest thing
+  # here (eight poses at 10-17s each under software rasterization), and keeping
+  # it parallel means it does not push the fast correctness gate behind it.
+  shots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The harnesses drive real Chromium with SwiftShader, so the browser has
+      # to be present. --with-deps pulls the shared libraries the runner lacks.
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Build
+        run: npm run build
+
+      # Renders eight fixed viewpoints across three time-of-day presets and two
+      # quality levels, failing on any console error or page exception. Much
+      # wider coverage than the boot check, which only poses one camera.
+      #
+      # Not a pixel-diff gate: these PNGs are not reproducible across machines,
+      # so the committed ones are a reference for humans, not a baseline to
+      # assert against. What is enforced is that all eight render clean.
+      - name: Screenshots
+        run: npm run shots
+
+      # The point of running this in CI is being able to look at the output.
+      # About 9 MB a run, hence the short retention -- these are for eyeballing
+      # a change, not for keeping.
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: shots
+          path: shots/*.png
+          if-no-files-found: error
+          retention-days: 14

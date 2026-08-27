@@ -10,9 +10,7 @@
     "preview": "vite preview",
     "shots": "node tools/shoot.mjs",
     "probe": "node tools/probe-exposure.mjs",
-    "boot": "node tools/boot-check.mjs",
-    "artifact": "vite build && node tools/build-artifact.mjs dist-single.html",
-    "check:artifact": "npm run artifact && node tools/check-artifact.mjs dist-single.html"
+    "boot": "node tools/boot-check.mjs"
   },
   "dependencies": {
     "three": "0.185.1"
