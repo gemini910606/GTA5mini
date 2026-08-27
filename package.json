@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "shots": "node tools/shoot.mjs",
     "probe": "node tools/probe-exposure.mjs",
-    "boot": "node tools/boot-check.mjs"
+    "boot": "node tools/boot-check.mjs",
+    "test": "node tools/test-level.mjs",
+    "shots:levels": "node tools/shoot-levels.mjs"
   },
   "dependencies": {
     "three": "0.185.1"

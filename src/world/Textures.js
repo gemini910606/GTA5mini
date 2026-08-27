@@ -87,7 +87,10 @@ function finish( canvas, repeat, colorSpace ) {
  *        optional overlay run in UV space (0..1), returns the final height
  */
 export function makeSurface( o ) {
-  const key = JSON.stringify( { ...o, pattern: o.pattern ? o.pattern.toString() : null } );
+  // `pattern.toString()` is NOT an identity: every closure `panelPattern`
+  // returns has the same source text, so two facades differing only in their
+  // column count would share one texture. The factories tag their result.
+  const key = JSON.stringify( { ...o, pattern: o.pattern ? ( o.pattern.key ?? o.pattern.toString() ) : null } );
   if ( cache.has( key ) ) return cache.get( key );
 
   const {
@@ -179,7 +182,7 @@ export function makeSurface( o ) {
 
 /** Rectangular brick/panel courses cut into the height field. */
 export function panelPattern( cols, rows, groove = 0.03, offsetAlternate = true ) {
-  return ( u, v, h ) => {
+  const fn = ( u, v, h ) => {
     const row = Math.floor( v * rows );
     const shift = offsetAlternate && row % 2 === 1 ? 0.5 / cols : 0;
     const cu = ( u + shift ) * cols;
@@ -195,12 +198,52 @@ export function panelPattern( cols, rows, groove = 0.03, offsetAlternate = true 
     const brickTone = ( hash2( Math.floor( cu ), row, 77 ) - 0.5 ) * 0.25;
     return inGroove ? h * 0.25 : Math.min( 1, h * 0.7 + 0.3 + brickTone );
   };
+  fn.key = `panel:${ cols },${ rows },${ groove },${ offsetAlternate }`;
+  return fn;
+}
+
+/**
+ * A window grid, for building facades.
+ *
+ * `panelPattern` only cuts shallow grooves, which is right for a concrete
+ * panel but leaves a tower reading as a blank slab: what makes a building look
+ * like a building at fifty metres is the near-black glass against the pale
+ * wall, not the joints. So this drives the height field to its extremes —
+ * `makeSurface` turns that into albedo contrast as well as relief.
+ *
+ * One texture tile is meant to cover roughly one floor band, so the caller's
+ * `uvScale` and `rows` together set the storey height.
+ *
+ * @param {number} cols   windows across one tile
+ * @param {number} rows   storeys per tile
+ * @param {object} [o]
+ * @param {number} [o.sill]  wall fraction around each window, 0..0.5
+ * @param {number} [o.lit]   fraction of windows with the blind up
+ */
+export function windowPattern( cols, rows, { sill = 0.18, lit = 0.22, seed = 5 } = {} ) {
+  const fn = ( u, v, h ) => {
+    const cu = u * cols, cv = v * rows;
+    const ix = Math.floor( cu ), iy = Math.floor( cv );
+    const fx = cu - ix, fy = cv - iy;
+    // The spandrel under a window is deeper than the reveal above it, which is
+    // what stops the grid from reading as graph paper.
+    if ( fx <= sill || fx >= 1 - sill || fy <= sill * 1.7 || fy >= 1 - sill * 0.7 ) {
+      return Math.min( 1, h * 0.45 + 0.55 );
+    }
+    const shade = hash2( ix, iy, seed );
+    if ( shade < lit ) return Math.min( 1, 0.78 + h * 0.22 );   // blind up, bright
+    return h * 0.1 + shade * 0.06;                              // dark glass
+  };
+  fn.key = `window:${ cols },${ rows },${ sill },${ lit },${ seed }`;
+  return fn;
 }
 
 /** Concentric wear rings + directional scoring, for metal plate. */
 export function metalPattern( ridges = 26 ) {
-  return ( u, v, h ) => {
+  const fn = ( u, v, h ) => {
     const streak = Math.sin( v * Math.PI * ridges ) * 0.5 + 0.5;
     return Math.min( 1, h * 0.45 + streak * 0.2 + 0.35 );
   };
+  fn.key = `metal:${ ridges }`;
+  return fn;
 }
