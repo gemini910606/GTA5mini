@@ -25,6 +25,34 @@ import { Sky } from 'three/addons/objects/Sky.js';
 // box is clipped away entirely and the sky renders as the clear colour.
 const SKY_RADIUS = 450;
 
+/**
+ * Ceiling on the sky's linear output, which in practice means the solar disc.
+ *
+ * Measured, not chosen. The thing that matters is not how bright the sky is --
+ * a sky with the sun in it SHOULD be bright -- but how much the bloom from it
+ * lifts the street underneath, because that is where the fight is. Measuring
+ * the lower 60% of the frame, with the sun in view against with it behind:
+ *
+ *   clamp 4.5, bloom radius 0.55   street 0.545 vs 0.307   1.78x
+ *   clamp 1.4, bloom radius 0.25   street 0.356 vs 0.284   1.25x
+ *
+ * At 1.78x the crates and facades wash out to flat white and you cannot see
+ * what you are shooting at. Lowering this alone was not enough -- even at 1.2
+ * the ratio stayed above 1.5 -- because the glare is spatial: the fix is this
+ * together with the tighter bloom radius in `Renderer`.
+ *
+ * Note the figures depend on resolution. UnrealBloomPass blurs through a mip
+ * chain, so at a smaller framebuffer the same radius covers proportionally
+ * more of the frame: `npm run probe` measures at 480x270 and reads 1.39x where
+ * 720x405 reads 1.25x. The probe is therefore the conservative instrument, and
+ * its limit is set against its own numbers.
+ *
+ * It only affects the visible disc. `refreshIBL` zeroes `showSunDisc` before
+ * baking, so the away-facing measurement above does not move with it (0.307 ->
+ * 0.306), which is how we know scene lighting is untouched.
+ */
+const SKY_CLAMP = 1.4;
+
 // The preset `envIntensity` values were measured against the procedural sky.
 // The HDRI probe carries different absolute energy, so switching source without
 // rescaling shifts exposure. Measured with `npm run probe` — see README.
@@ -79,13 +107,20 @@ export class Environment {
     // Clamp the sky's linear output. `Sky` emits the solar disc at roughly
     // 7e5, which is physically reasonable and completely unusable: fed into
     // UnrealBloomPass it produces a bloom covering half the frame no matter
-    // what the threshold is. 4.5 still reads as "far brighter than white"
-    // after ACES — the sun is clearly a light source — but keeps the bloom
-    // chain in a range where the threshold actually does something.
-    this.sky.material.fragmentShader = this.sky.material.fragmentShader.replace(
-      'gl_FragColor = vec4( texColor, 1.0 );',
-      'gl_FragColor = vec4( min( texColor, vec3( 4.5 ) ), 1.0 );',
-    );
+    // what the threshold is.
+    //
+    // A uniform rather than a baked constant, because this is the single knob
+    // that decides whether looking at the sun is dramatic or unplayable, and
+    // it has to be sweepable by `npm run probe` rather than guessed at.
+    //
+    // It only affects the visible disc: `refreshIBL` sets `showSunDisc` to 0
+    // before baking, so scene lighting does not move when this does.
+    this.sky.material.uniforms.skyClamp = { value: SKY_CLAMP };
+    this.sky.material.fragmentShader =
+      'uniform float skyClamp;\n' + this.sky.material.fragmentShader.replace(
+        'gl_FragColor = vec4( texColor, 1.0 );',
+        'gl_FragColor = vec4( min( texColor, vec3( skyClamp ) ), 1.0 );',
+      );
     this.sky.material.needsUpdate = true;
 
     this.sky.scale.setScalar( SKY_RADIUS );
@@ -257,6 +292,15 @@ export class Environment {
   /** Flips between the two sources. */
   cycleIblSource() {
     return this.setIblSource( this.iblSource === 'hdri' ? 'procedural' : 'hdri' );
+  }
+
+  /** The solar-disc ceiling. Exposed so the exposure probe can sweep it. */
+  get skyClamp() {
+    return this.sky.material.uniforms.skyClamp.value;
+  }
+
+  set skyClamp( v ) {
+    this.sky.material.uniforms.skyClamp.value = v;
   }
 
   /** Keeps the shadow frustum and the sky dome centred on the player. */

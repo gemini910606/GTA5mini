@@ -29,7 +29,7 @@ npm run dev      # Vite dev server
 npm run build    # 產出 dist/
 npm run shots    # headless Chromium 截圖 8 個視角 + smoke test（任何 console error 即失敗）
 npm run shots:levels  # 每張地圖的預算表 + 截圖，並檢查切換地圖不漏記憶體
-npm run probe    # 曝光參數掃描，輸出像素統計
+npm run probe    # 曝光掃描 + 太陽眩光檢查（街道被抬亮超過 1.45 倍就失敗）
 npm test         # 無頭檢查：碰撞粗篩 vs 線性掃描、prism 面朝向、模擬重放一致性
 ```
 
@@ -58,6 +58,11 @@ npm test         # 無頭檢查：碰撞粗篩 vs 線性掃描、prism 面朝向
   `Environment.refreshIBL()` 烘之前會把 `showSunDisc` 設為 0，**不要拿掉**。
 - **`renderer.info.autoReset` 必須是 `false`**。composer 每幀多次 `render()`，開著的話統計只反映最後一個 pass。
 - **`Sky` 的 box 必須在相機 far plane 之內**（目前 450，far 是 800），否則整個被裁掉。
+- **太陽圓盤的亮度鉗值(`SKY_CLAMP`)和 bloom 半徑是一組的。** 單獨調鉗值沒用——
+  眩光是空間性的,要靠半徑收。動任一個都要跑 `npm run probe`,它量的是
+  「面向太陽時街道被抬亮幾倍」,不是天空多亮(天空本來就該亮)。
+- **`UnrealBloomPass` 的擴散和解析度有關。** 它走 mip 鏈,framebuffer 越小、同樣半徑
+  蓋掉的畫面比例越大。probe 在 480×270 量,讀數比實際遊玩解析度保守。
 - **`prisms` 的面朝向用眼睛驗不出來。** 纏繞方向反掉的建築看起來還是實心的 ——
   近側的牆被背面剔除，你看到的是遠側牆的內面。改到 `PrismGeometry.js` 一定要跑 `npm test`。
 - **`sim/` 底下不准碰 camera、mesh、DOM。** 那層是客戶端與伺服器共用的模擬，

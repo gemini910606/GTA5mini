@@ -113,7 +113,12 @@ export class Renderer {
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2( w, h ),
       0.34,   // strength — restrained; bloom is seasoning, not sauce
-      0.55,   // radius
+      // Radius, not strength, is what decides whether the sun glares or floods.
+      // At 0.55 a sun in frame lifted the street from 0.307 to 0.545 mean luma;
+      // at 0.25, with the solar disc also clamped lower (see Environment.js),
+      // the same view sits at 0.356 and the scene stays readable. Bloom away
+      // from the sun barely moves either way: 0.307 vs 0.284.
+      0.25,   // radius
       1.15,   // threshold: only pixels brighter than white bloom. Below 1.0
               // this catches ordinary sunlit surfaces and the frame hazes over.
     );

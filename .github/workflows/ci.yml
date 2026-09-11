@@ -81,6 +81,12 @@ jobs:
       # Not a pixel-diff gate: these PNGs are not reproducible across machines,
       # so the committed ones are a reference for humans, not a baseline to
       # assert against. What is enforced is that all eight render clean.
+      # Measures how far the glare off the solar disc lifts the street beneath
+      # it. The bloom flood that prompted this check sat in the build unnoticed
+      # because every fixed pose in `shots` has the sun behind the camera.
+      - name: Exposure and glare probe
+        run: npm run probe
+
       - name: Screenshots
         run: npm run shots
 
