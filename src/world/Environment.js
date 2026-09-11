@@ -25,6 +25,34 @@ import { Sky } from 'three/addons/objects/Sky.js';
 // box is clipped away entirely and the sky renders as the clear colour.
 const SKY_RADIUS = 450;
 
+/**
+ * Ceiling on the sky's linear output, which in practice means the solar disc.
+ *
+ * Measured, not chosen. The thing that matters is not how bright the sky is --
+ * a sky with the sun in it SHOULD be bright -- but how much the bloom from it
+ * lifts the street underneath, because that is where the fight is. Measuring
+ * the lower 60% of the frame, with the sun in view against with it behind:
+ *
+ *   clamp 4.5, bloom radius 0.55   street 0.545 vs 0.307   1.78x
+ *   clamp 1.4, bloom radius 0.25   street 0.356 vs 0.284   1.25x
+ *
+ * At 1.78x the crates and facades wash out to flat white and you cannot see
+ * what you are shooting at. Lowering this alone was not enough -- even at 1.2
+ * the ratio stayed above 1.5 -- because the glare is spatial: the fix is this
+ * together with the tighter bloom radius in `Renderer`.
+ *
+ * Note the figures depend on resolution. UnrealBloomPass blurs through a mip
+ * chain, so at a smaller framebuffer the same radius covers proportionally
+ * more of the frame: `npm run probe` measures at 480x270 and reads 1.39x where
+ * 720x405 reads 1.25x. The probe is therefore the conservative instrument, and
+ * its limit is set against its own numbers.
+ *
+ * It only affects the visible disc. `refreshIBL` zeroes `showSunDisc` before
+ * baking, so the away-facing measurement above does not move with it (0.307 ->
+ * 0.306), which is how we know scene lighting is untouched.
+ */
+const SKY_CLAMP = 1.4;
+
 // The preset `envIntensity` values were measured against the procedural sky.
 // The HDRI probe carries different absolute energy, so switching source without
 // rescaling shifts exposure. Measured with `npm run probe` — see README.
@@ -41,6 +69,7 @@ export const TIME_OF_DAY = {
     hemiSky: 0xbcd6ff, hemiGround: 0x6b5844, hemiIntensity: 0.9,
     fogColor: 0xb8c4d4, fogDensity: 0.0048,
     exposure: 0.9,
+    signEmission: 0.85,
   },
   noon: {
     label: 'Noon',
@@ -52,6 +81,7 @@ export const TIME_OF_DAY = {
     hemiSky: 0xc9dcff, hemiGround: 0x7a6c58, hemiIntensity: 0.8,
     fogColor: 0xcbd8e6, fogDensity: 0.0030,
     exposure: 0.8,
+    signEmission: 0.7,
   },
   dusk: {
     label: 'Dusk',
@@ -63,6 +93,46 @@ export const TIME_OF_DAY = {
     hemiSky: 0x8fa3c8, hemiGround: 0x4a3f38, hemiIntensity: 1.1,
     fogColor: 0x76839c, fogDensity: 0.0080,
     exposure: 1.15,
+    signEmission: 0.9,
+  },
+
+  /**
+   * Night.
+   *
+   * `elevation` drives the sky shader, and three's `Sky` only goes dark with
+   * the sun below the horizon -- so it sits at -7 and the key light is moved
+   * off it with `lightElevation`. Without that split the choice is a daylight
+   * sky or a directional light shining up through the pavement.
+   *
+   * The moon is dim on purpose. What lights a street like this is the signage,
+   * which is why `signEmission` is nearly three times the daytime value: after
+   * dark the boards stop being decoration and become the light source.
+   */
+  night: {
+    label: 'Night',
+    elevation: -7.0, azimuth: 250,
+    lightElevation: 44, lightAzimuth: 205,
+    turbidity: 4.0, rayleigh: 0.7, mieCoefficient: 0.004, mieDirectionalG: 0.82,
+    cloudCoverage: 0.50, cloudDensity: 0.50, cloudElevation: 0.6,
+    sunColor: 0x9fb4dc, sunIntensity: 1.6,
+    envIntensity: 0.65,
+    // The hemisphere carries this preset, and its colour is doing the work,
+    // not its intensity. With the sun below the horizon the sky shader is
+    // nearly black, so `envIntensity` multiplies almost nothing -- measured,
+    // raising it from 0.65 to 2.4 moved the street from 2.5% to 6.7% mean luma
+    // and left 64% of it crushed to black. A HemisphereLight's colour is
+    // independent of the sky, so that is the lever.
+    //
+    // It is tinted mauve rather than blue on purpose: an emissive sign in
+    // three.js lights nothing but itself, so the spill that neon would really
+    // throw onto the street has to come from somewhere, and this is it.
+    //
+    //   default          street 0.026 mean, 90.3% crushed
+    //   this             street 0.216 mean,  7.5% crushed
+    hemiSky: 0x9c86ab, hemiGround: 0x4a3840, hemiIntensity: 2.6,
+    fogColor: 0x141020, fogDensity: 0.0115,
+    exposure: 2.2,
+    signEmission: 2.4,
   },
 };
 
@@ -79,13 +149,20 @@ export class Environment {
     // Clamp the sky's linear output. `Sky` emits the solar disc at roughly
     // 7e5, which is physically reasonable and completely unusable: fed into
     // UnrealBloomPass it produces a bloom covering half the frame no matter
-    // what the threshold is. 4.5 still reads as "far brighter than white"
-    // after ACES — the sun is clearly a light source — but keeps the bloom
-    // chain in a range where the threshold actually does something.
-    this.sky.material.fragmentShader = this.sky.material.fragmentShader.replace(
-      'gl_FragColor = vec4( texColor, 1.0 );',
-      'gl_FragColor = vec4( min( texColor, vec3( 4.5 ) ), 1.0 );',
-    );
+    // what the threshold is.
+    //
+    // A uniform rather than a baked constant, because this is the single knob
+    // that decides whether looking at the sun is dramatic or unplayable, and
+    // it has to be sweepable by `npm run probe` rather than guessed at.
+    //
+    // It only affects the visible disc: `refreshIBL` sets `showSunDisc` to 0
+    // before baking, so scene lighting does not move when this does.
+    this.sky.material.uniforms.skyClamp = { value: SKY_CLAMP };
+    this.sky.material.fragmentShader =
+      'uniform float skyClamp;\n' + this.sky.material.fragmentShader.replace(
+        'gl_FragColor = vec4( texColor, 1.0 );',
+        'gl_FragColor = vec4( min( texColor, vec3( skyClamp ) ), 1.0 );',
+      );
     this.sky.material.needsUpdate = true;
 
     this.sky.scale.setScalar( SKY_RADIUS );
@@ -93,6 +170,8 @@ export class Environment {
     scene.add( this.sky );
 
     this.sunDirection = new THREE.Vector3();
+    /** Where the key light comes from. Usually the sun; the moon at night. */
+    this._lightDirection = new THREE.Vector3();
     this._envTarget = null;
     this.iblSource = 'procedural';
 
@@ -138,7 +217,20 @@ export class Environment {
     this.sunDirection.setFromSphericalCoords( 1, phi, theta );
     u.sunPosition.value.copy( this.sunDirection );
 
-    this.sun.position.copy( this.sunDirection ).multiplyScalar( 140 );
+    // The key light usually is the sun, but it need not be: at night the sky's
+    // sun has to be below the horizon to go dark, while the light still has to
+    // come from above. `lightElevation` splits the two.
+    if ( p.lightElevation !== undefined ) {
+      this._lightDirection.setFromSphericalCoords(
+        1,
+        THREE.MathUtils.degToRad( 90 - p.lightElevation ),
+        THREE.MathUtils.degToRad( p.lightAzimuth ?? p.azimuth ),
+      );
+    } else {
+      this._lightDirection.copy( this.sunDirection );
+    }
+
+    this.sun.position.copy( this._lightDirection ).multiplyScalar( 140 );
     this.sun.target.position.set( 0, 0, 0 );
     this.sun.target.updateMatrixWorld();
     this.sun.color.setHex( p.sunColor );
@@ -259,12 +351,28 @@ export class Environment {
     return this.setIblSource( this.iblSource === 'hdri' ? 'procedural' : 'hdri' );
   }
 
-  /** Keeps the shadow frustum and the sky dome centred on the player. */
+  /** The solar-disc ceiling. Exposed so the exposure probe can sweep it. */
+  get skyClamp() {
+    return this.sky.material.uniforms.skyClamp.value;
+  }
+
+  set skyClamp( v ) {
+    this.sky.material.uniforms.skyClamp.value = v;
+  }
+
+  /**
+   * Keeps the shadow frustum and the sky dome centred on the player.
+   *
+   * Follows the key light, not the sun: at night they are different
+   * directions, and using the sun would light the street from below the
+   * pavement. Runs every frame, so it allocates nothing.
+   */
   followTarget( position ) {
     this.sun.target.position.set( position.x, 0, position.z );
     this.sun.position
-      .copy( this.sunDirection ).multiplyScalar( 140 )
-      .add( new THREE.Vector3( position.x, 0, position.z ) );
+      .copy( this._lightDirection ).multiplyScalar( 140 );
+    this.sun.position.x += position.x;
+    this.sun.position.z += position.z;
     this.sun.target.updateMatrixWorld();
     this.sky.position.set( position.x, 0, position.z );
   }

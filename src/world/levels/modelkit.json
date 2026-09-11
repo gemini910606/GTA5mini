@@ -1,0 +1,76 @@
+{
+ "name": "Model Kit",
+ "attribution": "City Kit (Suburban) by Kenney — www.kenney.nl — CC0",
+ "source": {
+  "kit": "kenney city-kit-suburban 2.0",
+  "licence": "CC0",
+  "scale": 10
+ },
+ "ground": {
+  "material": "asphalt",
+  "size": 400
+ },
+ "playerStart": [ 0, 0, 60 ],
+ "materials": {
+  "asphalt": {
+   "kind": "surface",
+   "surface": {
+    "size": 512,
+    "tint": [ 0.3, 0.3, 0.32 ],
+    "contrast": 0.12,
+    "roughBase": 0.9,
+    "roughVar": 0.1,
+    "bump": 0.5,
+    "period": 24,
+    "repeat": 50,
+    "seed": 3
+   },
+   "metalness": 0.02,
+   "normalScale": [ 0.5, 0.5 ]
+  }
+ },
+ "elements": [
+  {
+   "type": "model",
+   "url": "models/building-type-a.glb",
+   "instances": [
+    [ -17, 0, -48, 1.5707963267948966, 10 ],
+    [ 17, 0, -31, -1.5707963267948966, 10 ],
+    [ -17, 0, 3, 1.5707963267948966, 10 ],
+    [ 17, 0, 20, -1.5707963267948966, 10 ]
+   ]
+  },
+  {
+   "type": "model",
+   "url": "models/building-type-f.glb",
+   "instances": [
+    [ 17, 0, -48, -1.5707963267948966, 10 ],
+    [ -17, 0, -14, 1.5707963267948966, 10 ],
+    [ 17, 0, 3, -1.5707963267948966, 10 ],
+    [ -17, 0, 37, 1.5707963267948966, 10 ]
+   ]
+  },
+  {
+   "type": "model",
+   "url": "models/building-type-k.glb",
+   "instances": [
+    [ -17, 0, -31, 1.5707963267948966, 10 ],
+    [ 17, 0, -14, -1.5707963267948966, 10 ],
+    [ -17, 0, 20, 1.5707963267948966, 10 ],
+    [ 17, 0, 37, -1.5707963267948966, 10 ]
+   ]
+  }
+ ],
+ "spawnPoints": [
+  [ 0, 0, -40 ],
+  [ 0, 0, -20 ],
+  [ 0, 0, 0 ],
+  [ 0, 0, 20 ],
+  [ 0, 0, 40 ],
+  [ 6, 0, -30 ],
+  [ -6, 0, -10 ],
+  [ 6, 0, 10 ],
+  [ -6, 0, 30 ],
+  [ 0, 0, 52 ]
+ ]
+}

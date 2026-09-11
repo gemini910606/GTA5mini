@@ -21,10 +21,11 @@ jobs:
       - run: npm ci
 
       # First, because it is pure Node and takes a couple of seconds: the
-      # collision broad phase against its linear reference, and the face winding
-      # of every prism in every level. Both failures are invisible in a
-      # screenshot, so they must not sit behind the slow browser jobs.
-      - name: Geometry tests
+      # collision broad phase against its linear reference, the face winding of
+      # every prism in every level, and that replaying a command stream
+      # reproduces the state it produced before. All three failures are
+      # invisible in a screenshot, so they must not sit behind the browser jobs.
+      - name: Headless tests
         run: npm test
 
       # The harnesses drive real Chromium with SwiftShader, so the browser has
@@ -80,6 +81,12 @@ jobs:
       # Not a pixel-diff gate: these PNGs are not reproducible across machines,
       # so the committed ones are a reference for humans, not a baseline to
       # assert against. What is enforced is that all eight render clean.
+      # Measures how far the glare off the solar disc lifts the street beneath
+      # it. The bloom flood that prompted this check sat in the build unnoticed
+      # because every fixed pose in `shots` has the sun behind the camera.
+      - name: Exposure and glare probe
+        run: npm run probe
+
       - name: Screenshots
         run: npm run shots
 

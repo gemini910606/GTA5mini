@@ -327,6 +327,94 @@ function facadeFor( b, i ) {
 /** Metres per storey. One texture tile covers exactly this. */
 const STOREY = 3;
 
+/** Deterministic LCG, so regenerating a map twice gives the same street. */
+function rng( seed ) {
+  let s = seed >>> 0;
+  return () => ( s = ( s * 1664525 + 1013904223 ) >>> 0 ) / 4294967296;
+}
+
+const pointInRing = ( ring, x, z ) => {
+  let inside = false;
+  for ( let i = 0, j = ring.length - 1; i < ring.length; j = i ++ ) {
+    const [ xi, zi ] = ring[ i ], [ xj, zj ] = ring[ j ];
+    if ( ( zi > z ) !== ( zj > z ) && x < xi + ( xj - xi ) * ( z - zi ) / ( zj - zi ) ) inside = ! inside;
+  }
+  return inside;
+};
+
+/**
+ * Hangs shop signs on every facade that faces open ground.
+ *
+ * This is the single biggest thing standing between "extruded footprints" and
+ * "a street in Tokyo". PLATEAU has the massing right and says nothing at all
+ * about surfaces, and a bare wall is a bare wall anywhere in the world.
+ *
+ * Real signage stacks vertically up the corner of a building, one board per
+ * floor, on whichever side people walk past. So: skip any edge with another
+ * building three metres off it, skip anything too short to hang a board on,
+ * and stack from above the shopfront to just under the parapet.
+ *
+ * Emits the flat `[ x, y, z, rotY, w, h, cell ]` sevens the `signs` element
+ * wants, with `rotY` the yaw of the wall's outward normal.
+ */
+function signBoards( play, all, cells, seed ) {
+  const rand = rng( seed );
+  const out = [];
+
+  const BASE = 2.6;          // above the shopfront glazing
+  const GAP = 0.35;
+  const MIN_EDGE = 2.2;
+  const CLEARANCE = 3.0;     // how far out to look for another building
+  const MAX_PER_COLUMN = 5;
+  const STANDOFF = 0.18;     // off the wall, or it z-fights the facade
+
+  for ( const b of play ) {
+    const ring = b.ring;
+    const n = ring.length;
+    for ( let i = 0, j = n - 1; i < n; j = i ++ ) {
+      const [ ax, az ] = ring[ j ], [ bx, bz ] = ring[ i ];
+      const ux = bx - ax, uz = bz - az;
+      const len = Math.hypot( ux, uz );
+      if ( len < MIN_EDGE ) continue;
+
+      // Outward normal for a positively-wound ring, the same relation the
+      // runtime geometry uses.
+      const nx = uz / len, nz = -ux / len;
+      const mx = ( ax + bx ) * 0.5, mz = ( az + bz ) * 0.5;
+
+      // Is there street out here, or the next building?
+      const px = mx + nx * CLEARANCE, pz = mz + nz * CLEARANCE;
+      if ( all.some( o => o !== b && pointInRing( o.ring, px, pz ) ) ) continue;
+
+      const rotY = Math.atan2( nx, nz );
+      const columns = len > 9 ? 2 : 1;
+
+      for ( let c = 0; c < columns; c ++ ) {
+        if ( rand() < 0.22 ) continue;                 // not every bay is let
+        // Toward the ends of the wall, where signs actually hang.
+        const t = columns === 1
+          ? 0.18 + rand() * 0.20
+          : ( c === 0 ? 0.12 + rand() * 0.12 : 0.76 + rand() * 0.12 );
+        const sx = ax + ux * t + nx * STANDOFF;
+        const sz = az + uz * t + nz * STANDOFF;
+
+        const w = 0.85 + rand() * 0.45;
+        const h = 2.1 + rand() * 0.7;
+        const ceiling = b.height - 0.6;
+        let y = BASE;
+        for ( let k = 0; k < MAX_PER_COLUMN && y + h < ceiling; k ++ ) {
+          out.push(
+            round( sx, 1 ), round( y, 1 ), round( sz, 1 ), round( rotY, 3 ),
+            round( w, 2 ), round( h, 2 ), Math.floor( rand() * cells ),
+          );
+          y += h + GAP;
+        }
+      }
+    }
+  }
+  return out;
+}
+
 const round = ( v, dp = 2 ) => Number( v.toFixed( dp ) );
 
 /**
@@ -588,6 +676,14 @@ function main() {
       size: [ dx * 2, H, dz * 2 ], pos: [ sx, H / 2, sz ] } );
   }
 
+  // Seeded from the crop so the same coordinates always produce the same street.
+  const ATLAS = { cols: 4, rows: 2, cell: 128, seed: 7 };
+  const boards = signBoards( play, game, ATLAS.cols * ATLAS.rows,
+    Math.abs( Math.round( centre.x * 7 + centre.y * 13 ) ) || 1 );
+  if ( boards.length ) {
+    elements.push( { type: 'signs', atlas: ATLAS, emissiveIntensity: 1.0, boards } );
+  }
+
   const boxes = play;
   const spawns = streetPoints( boxes, half, {} );
   if ( spawns.length < 6 ) throw new Error( `build-plateau: only ${ spawns.length } spawn points; the crop is too built-up` );
@@ -630,6 +726,7 @@ function main() {
   console.log( `  draw calls  ${ elements.filter( e => e.type === 'prisms' ).length } merged + ${ elements.length - byMaterial.size - 1 } walls` );
   console.log( `  triangles   ~${ tris }` );
   console.log( `  colliders   ${ play.length + 4 }` );
+  console.log( `  signs       ${ boards.length / 7 }` );
   console.log( `  spawns      ${ spawns.length - 1 } (+ player start)` );
   console.log( `  size        ${ ( statSync( out ).size / 1024 ).toFixed( 1 ) } KB` );
 }

@@ -1,11 +1,13 @@
 import * as THREE from 'three';
-import { makeSurface, panelPattern, metalPattern, windowPattern } from './Textures.js';
+import { makeSurface, panelPattern, metalPattern, windowPattern, makeSignAtlas } from './Textures.js';
 import { Colliders } from './Colliders.js';
-import { buildPrisms } from './PrismGeometry.js';
+import { buildPrisms, buildSignBoards } from './PrismGeometry.js';
+import { loadModel, placeModel } from './Models.js';
 import arena from './levels/arena.json';
 import kabukicho from './levels/kabukicho.json';
 import daikyocho from './levels/daikyocho.json';
 import shinjuku1 from './levels/shinjuku1.json';
+import modelkit from './levels/modelkit.json';
 
 /**
  * Every map the build knows about, in cycle order.
@@ -13,8 +15,13 @@ import shinjuku1 from './levels/shinjuku1.json';
  * The three Tokyo maps are Project PLATEAU LOD1 extracts converted by
  * `tools/build-plateau.mjs`; see each file's `source` block for the exact
  * coordinates and mesh tiles, and README.md for the attribution.
+ *
+ * `modelkit` is the one that fetches: it demonstrates the `model` element
+ * against downloaded glTF, and is the template to edit when swapping in an
+ * asset of your own. It is also the only level that does not survive into the
+ * offline single-file build -- see `Models.js`.
  */
-export const LEVELS = { arena, kabukicho, shinjuku1, daikyocho };
+export const LEVELS = { arena, kabukicho, shinjuku1, daikyocho, modelkit };
 
 /**
  * Builds a level from a JSON description.
@@ -78,6 +85,17 @@ export class Level {
 
     /** @type {THREE.Box3[]} */
     this.colliders = [];
+    /**
+     * Narrow-phase shapes, parallel to `colliders`. A null entry means the box
+     * is the shape; a prism supplies its footprint, because its box carries up
+     * to 43% more volume than the building does.
+     * @type {Array<{ ring: number[], top: number }|null>}
+     */
+    this.colliderShapes = [];
+    /** Sign materials, so a time-of-day change can drive their emission. */
+    this._signMaterials = [];
+    /** `model` elements awaiting `resolveModels`. */
+    this._pendingModels = [];
     /** @type {THREE.Object3D[]} */
     this.hittables = [];
     /** @type {THREE.Vector3[]} */
@@ -101,7 +119,61 @@ export class Level {
      * grid is an index over it, and `tools/test-colliders.mjs` holds the two to
      * the same answers.
      */
-    this.broadphase = new Colliders( this.colliders );
+    this.broadphase = new Colliders( this.colliders, this.colliderShapes );
+  }
+
+  /**
+   * Builds a level, including any `model` elements.
+   *
+   * The constructor stays synchronous because everything else is: procedural
+   * textures, prisms and signs all resolve immediately, and a level made of
+   * those is finished the moment `new Level` returns. Only glTF needs the
+   * network, so only levels that use it need awaiting -- which is why this is a
+   * factory rather than the constructor becoming async for everyone.
+   */
+  static async create( data ) {
+    const level = new Level( data );
+    await level.resolveModels();
+    return level;
+  }
+
+  /**
+   * Loads and places every deferred `model` element.
+   *
+   * The broad phase is rebuilt afterwards rather than appended to: it indexes
+   * the collider array at construction, so colliders arriving later have to be
+   * indexed with the rest.
+   */
+  async resolveModels() {
+    if ( ! this._pendingModels.length ) return this;
+
+    for ( const element of this._pendingModels ) {
+      const source = await loadModel( element.url );
+      // A single placement is just an instance list of one.
+      const instances = element.instances ?? [ [
+        ...( element.pos ?? [ 0, 0, 0 ] ), element.rotY ?? 0, element.scale ?? 1,
+      ] ];
+
+      for ( const [ x, y, z, rotY = 0, scale = element.scale ?? 1 ] of instances ) {
+        const { group, boxes } = placeModel( source, {
+          pos: [ x, y, z ], rotY, scale,
+          collide: element.collide !== false,
+          cast: element.cast !== false,
+          receive: element.receive !== false,
+        } );
+        group.name = element.name ?? `Model:${ element.url }`;
+        this.group.add( group );
+        if ( element.hittable !== false ) this.hittables.push( group );
+        for ( const b of boxes ) {
+          this.colliders.push( b );
+          this.colliderShapes.push( null );
+        }
+      }
+    }
+
+    this._pendingModels.length = 0;
+    this.broadphase = new Colliders( this.colliders, this.colliderShapes );
+    return this;
   }
 
   // --- materials -----------------------------------------------------------
@@ -148,6 +220,10 @@ export class Level {
       case 'ramp': return this._ramp( element );
       case 'instanced': return this._instanced( element );
       case 'prisms': return this._prisms( element );
+      case 'signs': return this._signs( element );
+      // Deferred: this one needs the network, and the constructor does not
+      // wait. `Level.create` resolves them; see `resolveModels`.
+      case 'model': return this._pendingModels.push( element );
       case 'pointLight': return this._pointLight( element );
       default: throw new Error( `Level: unknown element type "${ element.type }"` );
     }
@@ -186,6 +262,7 @@ export class Level {
       // Rotated boxes still register an AABB — fine here because every rotated
       // prop is either a ramp or a decorative panel the player cannot reach.
       this.colliders.push( new THREE.Box3().setFromObject( mesh ) );
+      this.colliderShapes.push( null );
     }
     // An invisible box is a boundary wall: it should stop the player without
     // catching bullets, or shots at the skyline would spark on thin air.
@@ -245,6 +322,7 @@ export class Level {
         new THREE.Vector3( x - r, y - hy, z - r ),
         new THREE.Vector3( x + r, y + hy, z + r ),
       ) );
+      this.colliderShapes.push( null );
     } );
 
     mesh.instanceMatrix.needsUpdate = true;
@@ -265,7 +343,12 @@ export class Level {
    */
   _prisms( { material, buildings, uvScale = 6, collide = true, cast = true, receive = true, hittable = true, name } ) {
     const { geometry, boxes } = buildPrisms( buildings, uvScale );
-    if ( collide ) for ( const b of boxes ) this.colliders.push( b );
+    if ( collide ) {
+      boxes.forEach( ( b, i ) => {
+        this.colliders.push( b );
+        this.colliderShapes.push( { ring: buildings[ i ].ring, top: buildings[ i ].h } );
+      } );
+    }
 
     const mesh = new THREE.Mesh( geometry, this._materials[ material ] );
     mesh.castShadow = cast;
@@ -273,6 +356,43 @@ export class Level {
     mesh.name = name ?? `Prisms:${ material }`;
     this.group.add( mesh );
     if ( hittable ) this.hittables.push( mesh );
+    return mesh;
+  }
+
+  /**
+   * Shop signage: flat boards merged into one geometry, printed from one atlas.
+   *
+   * Nothing else does as much to make a street read as Japanese. PLATEAU gives
+   * correct massing and bare walls, and a bare wall is a bare wall wherever it
+   * is in the world; the signs are what say where you are.
+   *
+   * They emit as well as reflect, from the same texture, so a sign is bright in
+   * proportion to what is printed on it -- the panel glows, the frame does not.
+   * There is no separate night material: at midday the sun buries the emission,
+   * after dark it is most of what lights the street. That is also what happens
+   * to a real sign.
+   */
+  _signs( { boards, atlas = {}, emissiveIntensity = 1.0, name } ) {
+    const built = makeSignAtlas( atlas );
+    const geometry = buildSignBoards( boards, built );
+
+    const material = new THREE.MeshStandardMaterial( {
+      map: built.map,
+      emissiveMap: built.emissiveMap,
+      emissive: 0xffffff,
+      emissiveIntensity,
+      roughness: 0.62,
+      metalness: 0.0,
+    } );
+
+    const mesh = new THREE.Mesh( geometry, material );
+    // Signs hang off facades and would fight with them in the depth buffer at
+    // distance; they are also too thin to cast a shadow worth the draw.
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.name = name ?? 'Signs';
+    this.group.add( mesh );
+    this._signMaterials.push( material );
     return mesh;
   }
 
@@ -297,9 +417,29 @@ export class Level {
   dispose() {
     this.group.traverse( o => o.geometry?.dispose() );
     for ( const m of Object.values( this._materials ) ) m.dispose();
+    // Sign atlases are built per level rather than cached by definition, so
+    // unlike the surface textures these really are this level's to release.
+    for ( const m of this._signMaterials ) {
+      m.map?.dispose();
+      m.emissiveMap?.dispose();
+      m.dispose();
+    }
+    this._signMaterials.length = 0;
     this.group.clear();
     this.colliders.length = 0;
+    this.colliderShapes.length = 0;
     this.hittables.length = 0;
+  }
+
+  /**
+   * Scales sign emission for the time of day.
+   *
+   * One multiplier rather than a second set of materials: the boards are lit
+   * by the same texture they print either way, and swapping materials at dusk
+   * would mean rebuilding geometry for a number.
+   */
+  setSignEmission( scale ) {
+    for ( const m of this._signMaterials ) m.emissiveIntensity = scale;
   }
 
   /** Cheap "is this AABB clear" test used by enemy spawning. */

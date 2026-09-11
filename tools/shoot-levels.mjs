@@ -12,8 +12,9 @@
  */
 
 import { chromium } from 'playwright';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { serve, CHROMIUM, NAV_TIMEOUT } from './static-server.mjs';
+import { collidersFrom } from '../src/world/LevelColliders.js';
 
 const OUT = 'shots/levels';
 mkdirSync( OUT, { recursive: true } );
@@ -40,9 +41,11 @@ const baseline = await page.evaluate( () => globalThis.__GAME__.renderer.info.me
 
 const rows = [];
 for ( const name of names ) {
-  const info = await page.evaluate( n => {
+  // `setLevel` is async -- a `model` level fetches -- so this must await it or
+  // every row reports the previous map's numbers.
+  const info = await page.evaluate( async n => {
     const g = globalThis.__GAME__;
-    g.setLevel( n );
+    await g.setLevel( n );
     const start = g.level.playerStart;
     // Standing at the spawn: if the converter put the player inside a building
     // this is where it shows.
@@ -62,6 +65,8 @@ for ( const name of names ) {
       // The spawn must not be inside geometry, and neither must any enemy point.
       startClear: g.level.isStandingClear( start.x, start.y, start.z ),
       spawnsClear: g.level.spawnPoints.every( p => g.level.isStandingClear( p.x, p.y, p.z ) ),
+      // Flattened so it can be compared against the headless derivation below.
+      boxes: g.level.colliders.flatMap( b => [ b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z ] ),
     };
   }, name );
   rows.push( info );
@@ -87,10 +92,37 @@ const settle = async () => {
 await page.evaluate( () => globalThis.__GAME__.setLevel( 'arena' ) );
 const oneCycle = await settle();
 for ( let i = 0; i < 2; i ++ ) {
-  for ( const n of names ) await page.evaluate( x => globalThis.__GAME__.setLevel( x ), n );
-  await page.evaluate( () => globalThis.__GAME__.setLevel( 'arena' ) );
+  for ( const n of names ) await page.evaluate( async x => { await globalThis.__GAME__.setLevel( x ); }, n );
+  await page.evaluate( async () => { await globalThis.__GAME__.setLevel( 'arena' ); } );
 }
 const after = await settle();
+
+// The authoritative server cannot build a `Level` — that needs a canvas — so
+// it derives collision from the level JSON with `collidersFrom`. Two
+// derivations of one collision world is exactly the drift the schema avoids
+// everywhere else, so they are held to each other box for box.
+const mismatches = [];
+for ( const r of rows ) {
+  const { boxes: headless, incomplete } = collidersFrom( JSON.parse( readFileSync( `src/world/levels/${ r.name }.json`, 'utf8' ) ) );
+  if ( incomplete.length ) {
+    console.log( `  collidersFrom skips ${ r.name }: cannot derive ${ incomplete.join( ', ' ) } headlessly` );
+    continue;
+  }
+  const flat = headless.flatMap( b => [ b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z ] );
+  if ( flat.length !== r.boxes.length ) {
+    mismatches.push( `${ r.name }: Level built ${ r.boxes.length / 6 } colliders, collidersFrom built ${ flat.length / 6 }` );
+    continue;
+  }
+  // Float32 round-trips through the page bridge, so compare at that precision
+  // rather than demanding bit equality of a number that crossed a JSON boundary.
+  let worst = 0, at = -1;
+  for ( let i = 0; i < flat.length; i ++ ) {
+    const d = Math.abs( flat[ i ] - r.boxes[ i ] );
+    if ( d > worst ) { worst = d; at = i; }
+  }
+  if ( worst > 1e-4 ) mismatches.push( `${ r.name }: collider ${ Math.floor( at / 6 ) } differs by ${ worst }` );
+  else console.log( `  collidersFrom matches Level on ${ r.name }: ${ flat.length / 6 } boxes, worst delta ${ worst.toExponential( 1 ) }` );
+}
 
 const pad = ( v, n ) => String( v ).padStart( n );
 console.log( 'name         draws   tris  tex  geo  coll cells entries spawns  start        clear' );
@@ -113,6 +145,7 @@ for ( const r of rows ) {
   if ( r.spawns < 6 ) problems.push( `${ r.name }: only ${ r.spawns } spawn points` );
 }
 if ( after > oneCycle ) problems.push( `geometry leak: ${ oneCycle } after one cycle, ${ after } after three` );
+problems.push( ...mismatches );
 
 console.log( errors.length ? '\nERRORS:\n' + errors.join( '\n' ) : '\nno console errors' );
 if ( problems.length ) console.error( '\nPROBLEMS:\n' + problems.join( '\n' ) );

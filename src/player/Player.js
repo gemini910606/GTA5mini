@@ -1,50 +1,37 @@
 import * as THREE from 'three';
+import { PlayerSim, STAND_HEIGHT } from '../sim/PlayerSim.js';
+import { Command, BTN } from '../sim/Command.js';
 
 /**
- * First-person character controller.
+ * The local player: a `PlayerSim` plus everything that only the person holding
+ * the mouse can see.
  *
- * Collision is swept-AABB against the level's static box list, resolved one
- * axis at a time, with a step-up retry so stairs and kerbs are walkable without
- * a navmesh. `position` is the feet position; the camera sits at `eyeHeight`.
+ * The split is the load-bearing part. `PlayerSim` owns anything another player
+ * could observe — position, velocity, stance, health — and runs headlessly, so
+ * the same code can run on an authoritative server. This class owns the feel:
+ * mouse look, head bob, the view kick after a shot, FOV, footstep audio, and
+ * writing the result into the camera. None of it is simulation, and none of it
+ * belongs anywhere a server can see.
+ *
+ * Input is funnelled through a `Command` rather than read straight off the
+ * keyboard, because that is the thing that goes on the wire: if movement can
+ * only be driven by a command, then a replayed command reproduces the movement,
+ * which is exactly what prediction and reconciliation need.
  */
 
-const STAND_HEIGHT = 1.78;
-const CROUCH_HEIGHT = 1.08;
-const RADIUS = 0.36;
-const STEP_HEIGHT = 0.55;
-const GRAVITY = -22;
-const JUMP_SPEED = 7.6;
-
-const SPEED = { walk: 5.4, sprint: 8.6, crouch: 2.6, air: 1.4 };
+const SPEED_WALK = 5.4;
 
 export class Player {
 
   constructor( camera, level ) {
     this.camera = camera;
-    this.level = level;
+    this._level = level;
 
-    this.position = level.playerStart.clone();
-    this.velocity = new THREE.Vector3();
-    // forward = ( -sin(yaw), 0, -cos(yaw) ), so yaw 0 looks down -Z, which is
-    // into the courtyard from the southern spawn.
-    this.yaw = 0;
-    this.pitch = 0;
-
-    this.height = STAND_HEIGHT;
-    this.targetHeight = STAND_HEIGHT;
-    this.grounded = false;
-    this.crouching = false;
-    this.sprinting = false;
-
-    this.health = 100;
-    this.maxHealth = 100;
-    this.stamina = 100;
-    this.maxStamina = 100;
+    this.sim = new PlayerSim( level.broadphase, level.playerStart );
+    this.cmd = new Command();
 
     this.baseFov = 75;
     this.adsFov = 52;
-    this.aiming = false;
-    this._adsBlend = 0;
 
     this._bobPhase = 0;
     this._bobAmount = 0;
@@ -54,246 +41,160 @@ export class Player {
     this._recoilPitch = 0;
     this._recoilYaw = 0;
     this._landDip = 0;
+    this._aimHeld = false;
 
-    this._tmpBox = new THREE.Box3();
-    this._forward = new THREE.Vector3();
     this._right = new THREE.Vector3();
 
     this.camera.fov = this.baseFov;
     this.camera.updateProjectionMatrix();
   }
 
-  // -------------------------------------------------------------------------
-  // Collision
-  // -------------------------------------------------------------------------
+  // --- state the rest of the game reads ------------------------------------
+  //
+  // Forwarded rather than mirrored: two copies of a player's position is the
+  // kind of thing that stays correct right up until one of them does not.
 
-  _boxAt( x, y, z, height = this.height ) {
-    // Written in place: `Box3.set` copies its arguments, so building two fresh
-    // vectors here would allocate twice on every collision probe.
-    this._tmpBox.min.set( x - RADIUS, y, z - RADIUS );
-    this._tmpBox.max.set( x + RADIUS, y + height, z + RADIUS );
-    return this._tmpBox;
+  get position() { return this.sim.position; }
+  get velocity() { return this.sim.velocity; }
+  get yaw() { return this.sim.yaw; }
+  set yaw( v ) { this.sim.yaw = v; }
+  get pitch() { return this.sim.pitch; }
+  set pitch( v ) { this.sim.pitch = v; }
+  get grounded() { return this.sim.grounded; }
+  get crouching() { return this.sim.crouching; }
+  get sprinting() { return this.sim.sprinting; }
+  get aiming() { return this.sim.aiming; }
+  get health() { return this.sim.health; }
+  get adsBlend() { return this.sim.adsBlend; }
+  get eyePosition() { return this.camera.position; }
+
+  get level() { return this._level; }
+
+  /** Swapping the map swaps the collision world the simulation runs against. */
+  set level( level ) {
+    this._level = level;
+    this.sim.colliders = level.broadphase;
   }
 
-  _collidesAt( x, y, z, height = this.height ) {
-    return this.level.broadphase.first( this._boxAt( x, y, z, height ) );
-  }
+  // --- input -> command ----------------------------------------------------
 
   /**
-   * Moves along one horizontal axis, retrying the move raised by STEP_HEIGHT
-   * when blocked so the player walks up stairs instead of jamming on them.
+   * Folds this frame's mouse movement into the view angles and packs the
+   * keyboard into the command's button mask.
+   *
+   * The angles are accumulated here rather than in the simulation because they
+   * are the one thing the client genuinely owns: sensitivity, the aim-down-
+   * sights slowdown and recoil are all feel, and a server that integrated mouse
+   * deltas would have to agree about all three.
    */
-  _moveHorizontal( dx, dz ) {
-    const tryAxis = ( axis, amount ) => {
-      if ( amount === 0 ) return;
-      const p = this.position;
-      const nx = axis === 'x' ? p.x + amount : p.x;
-      const nz = axis === 'z' ? p.z + amount : p.z;
-
-      if ( ! this._collidesAt( nx, p.y, nz ) ) {
-        p.x = nx; p.z = nz;
-        return;
-      }
-
-      // Step-up retry: is it clear one step higher, and is there floor there?
-      const stepY = p.y + STEP_HEIGHT;
-      if ( ! this._collidesAt( nx, stepY, nz ) ) {
-        // Drop back down onto whatever is beneath the stepped-up position.
-        let landY = stepY;
-        for ( let t = 0; t <= STEP_HEIGHT; t += 0.05 ) {
-          if ( this._collidesAt( nx, stepY - t, nz ) ) { landY = stepY - t + 0.05; break; }
-          landY = stepY - t;
-        }
-        if ( landY - p.y <= STEP_HEIGHT + 0.01 ) {
-          p.x = nx; p.z = nz; p.y = landY;
-          this.grounded = true;
-          return;
-        }
-      }
-      // Blocked: kill velocity on this axis so we slide along the wall.
-      if ( axis === 'x' ) this.velocity.x = 0; else this.velocity.z = 0;
-    };
-
-    tryAxis( 'x', dx );
-    tryAxis( 'z', dz );
-  }
-
-  _moveVertical( dy ) {
-    const p = this.position;
-    const ny = p.y + dy;
-
-    if ( ! this._collidesAt( p.x, ny, p.z ) ) {
-      p.y = ny;
-      this.grounded = false;
-      if ( p.y < 0 ) { p.y = 0; this.velocity.y = 0; this.grounded = true; }
-      return;
-    }
-
-    // Resolve by bisecting toward the blocking surface.
-    let lo = 0, hi = dy;
-    for ( let i = 0; i < 8; i ++ ) {
-      const mid = ( lo + hi ) / 2;
-      if ( this._collidesAt( p.x, p.y + mid, p.z ) ) hi = mid; else lo = mid;
-    }
-    p.y += lo;
-
-    if ( dy < 0 ) {
-      if ( ! this.grounded && this.velocity.y < -7 ) {
-        this._landDip = Math.min( 0.22, -this.velocity.y * 0.014 );
-      }
-      this.grounded = true;
-    }
-    this.velocity.y = 0;
-  }
-
-  // -------------------------------------------------------------------------
-  // Update
-  // -------------------------------------------------------------------------
-
-  update( dt, input ) {
-    // --- Look ---------------------------------------------------------------
+  _buildCommand( input, tick ) {
     const look = input.consumeLook();
-    const aimScale = 1 - this._adsBlend * 0.45;   // slower turn while aiming
-    this.yaw += look.yaw * aimScale;
-    this.pitch = THREE.MathUtils.clamp(
-      this.pitch + look.pitch * aimScale,
+    const aimScale = 1 - this.sim.adsBlend * 0.45;   // slower turn while aiming
+    const cmd = this.cmd;
+
+    cmd.tick = tick;
+    cmd.yaw = this.sim.yaw + look.yaw * aimScale;
+    cmd.pitch = THREE.MathUtils.clamp(
+      this.sim.pitch + look.pitch * aimScale,
       -Math.PI / 2 + 0.02, Math.PI / 2 - 0.02,
     );
 
-    // --- Stance -------------------------------------------------------------
-    this.crouching = input.isDown( 'ControlLeft' ) || input.isDown( 'KeyC' );
-    this.targetHeight = this.crouching ? CROUCH_HEIGHT : STAND_HEIGHT;
+    cmd.buttons = 0;
+    cmd.set( BTN.forward, input.isDown( 'KeyW' ) );
+    cmd.set( BTN.back, input.isDown( 'KeyS' ) );
+    cmd.set( BTN.left, input.isDown( 'KeyA' ) );
+    cmd.set( BTN.right, input.isDown( 'KeyD' ) );
+    cmd.set( BTN.jump, input.isDown( 'Space' ) );
+    cmd.set( BTN.crouch, input.isDown( 'ControlLeft' ) || input.isDown( 'KeyC' ) );
+    cmd.set( BTN.sprint, input.isDown( 'ShiftLeft' ) );
+    cmd.set( BTN.aim, this._aimHeld );
 
-    // Refuse to stand up under an overhang.
-    if ( ! this.crouching && this.height < STAND_HEIGHT - 0.01 ) {
-      if ( this._collidesAt( this.position.x, this.position.y, this.position.z, STAND_HEIGHT ) ) {
-        this.targetHeight = this.height;
-      }
-    }
-    this.height = THREE.MathUtils.damp( this.height, this.targetHeight, 14, dt );
+    // Rounded to wire precision here, so the local prediction sees exactly the
+    // angles a server would: skip it and every tick is off by a fraction of a
+    // degree, which reads as a permanent disagreement rather than a rounding.
+    return cmd.quantise();
+  }
 
-    // --- Desired horizontal velocity ---------------------------------------
-    this._forward.set( -Math.sin( this.yaw ), 0, -Math.cos( this.yaw ) );
-    this._right.set( Math.cos( this.yaw ), 0, -Math.sin( this.yaw ) );
+  // --- tick ----------------------------------------------------------------
 
-    let ix = 0, iz = 0;
-    if ( input.isDown( 'KeyW' ) ) iz += 1;
-    if ( input.isDown( 'KeyS' ) ) iz -= 1;
-    if ( input.isDown( 'KeyD' ) ) ix += 1;
-    if ( input.isDown( 'KeyA' ) ) ix -= 1;
-
-    const moving = ix !== 0 || iz !== 0;
-    const wantsSprint = input.isDown( 'ShiftLeft' ) && iz > 0 && ! this.crouching && this.stamina > 1;
-    this.sprinting = wantsSprint && this.grounded;
-
-    // Sprinting and aiming are mutually exclusive; aiming wins.
-    if ( this.aiming ) this.sprinting = false;
-
-    this.stamina = THREE.MathUtils.clamp(
-      this.stamina + ( this.sprinting ? -26 : 18 ) * dt, 0, this.maxStamina,
-    );
-
-    let speed = this.crouching ? SPEED.crouch : this.sprinting ? SPEED.sprint : SPEED.walk;
-    if ( this.aiming ) speed *= 0.55;
-    if ( ! this.grounded ) speed *= 1.0;
-
-    const wish = new THREE.Vector3()
-      .addScaledVector( this._forward, iz )
-      .addScaledVector( this._right, ix );
-    if ( wish.lengthSq() > 0 ) wish.normalize().multiplyScalar( speed );
-
-    // Ground control is snappy; air control is deliberately weak.
-    const accel = this.grounded ? 62 : 12;
-    this.velocity.x = THREE.MathUtils.damp( this.velocity.x, wish.x, accel * 0.16, dt );
-    this.velocity.z = THREE.MathUtils.damp( this.velocity.z, wish.z, accel * 0.16, dt );
-
-    // --- Jump / gravity ------------------------------------------------------
-    if ( input.isDown( 'Space' ) && this.grounded ) {
-      this.velocity.y = JUMP_SPEED;
-      this.grounded = false;
-    }
-    this.velocity.y += GRAVITY * dt;
-    this.velocity.y = Math.max( this.velocity.y, -60 );
-
-    // --- Integrate -----------------------------------------------------------
-    this._moveHorizontal( this.velocity.x * dt, this.velocity.z * dt );
-    this._moveVertical( this.velocity.y * dt );
-
-    // Ground probe: without it, walking off a ledge keeps `grounded` true for a frame.
-    if ( this.velocity.y <= 0 ) {
-      this.grounded = !! this._collidesAt( this.position.x, this.position.y - 0.06, this.position.z )
-        || this.position.y <= 0.001;
-    }
-
-    // --- Camera --------------------------------------------------------------
-    this._updateCamera( dt, moving );
+  update( dt, input, tick = 0 ) {
+    this.sim.step( this._buildCommand( input, tick ), dt );
+    if ( this.sim.landImpact > 0 ) this._landDip = this.sim.landImpact;
+    this._updateCamera( dt, this.sim.moving );
     return this;
   }
 
   _updateCamera( dt, moving ) {
+    const sim = this.sim;
     // Head bob, scaled by actual speed rather than input, so it settles naturally.
-    const horizontalSpeed = Math.hypot( this.velocity.x, this.velocity.z );
-    const bobTarget = ( moving && this.grounded ) ? Math.min( horizontalSpeed / SPEED.walk, 1.5 ) : 0;
+    const horizontalSpeed = Math.hypot( sim.velocity.x, sim.velocity.z );
+    const bobTarget = ( moving && sim.grounded ) ? Math.min( horizontalSpeed / SPEED_WALK, 1.5 ) : 0;
     this._bobAmount = THREE.MathUtils.damp( this._bobAmount, bobTarget, 8, dt );
     this._bobPhase += horizontalSpeed * dt * 1.9;
 
     // The view bob already tracks stride; a footfall is a half-cycle of it, so
     // steps stay locked to the animation instead of running on a timer that
     // drifts against it.
-    if ( moving && this.grounded ) {
+    if ( moving && sim.grounded ) {
       this._stepPhase += horizontalSpeed * dt * 1.9;
       if ( this._stepPhase >= Math.PI ) {
         this._stepPhase -= Math.PI;
-        this.onStep?.( this.sprinting );
+        this.onStep?.( sim.sprinting );
       }
     } else {
       // Land the next step promptly rather than mid-stride after a pause.
       this._stepPhase = Math.PI * 0.75;
     }
 
-    const bobY = Math.sin( this._bobPhase * 2 ) * 0.032 * this._bobAmount * ( 1 - this._adsBlend * 0.8 );
-    const bobX = Math.cos( this._bobPhase ) * 0.028 * this._bobAmount * ( 1 - this._adsBlend * 0.8 );
+    const fade = 1 - sim.adsBlend * 0.8;
+    const bobY = Math.sin( this._bobPhase * 2 ) * 0.032 * this._bobAmount * fade;
+    const bobX = Math.cos( this._bobPhase ) * 0.028 * this._bobAmount * fade;
     const bobRoll = Math.cos( this._bobPhase ) * 0.008 * this._bobAmount;
 
     this._landDip = THREE.MathUtils.damp( this._landDip, 0, 9, dt );
     this._recoilPitch = THREE.MathUtils.damp( this._recoilPitch, 0, 11, dt );
     this._recoilYaw = THREE.MathUtils.damp( this._recoilYaw, 0, 11, dt );
 
-    const eye = this.position.y + this.height - 0.14 + bobY - this._landDip;
+    this._right.set( Math.cos( sim.yaw ), 0, -Math.sin( sim.yaw ) );
+
+    const eye = sim.position.y + sim.height - 0.14 + bobY - this._landDip;
     this.camera.position.set(
-      this.position.x + bobX * this._right.x,
+      sim.position.x + bobX * this._right.x,
       eye,
-      this.position.z + bobX * this._right.z,
+      sim.position.z + bobX * this._right.z,
     );
 
     this.camera.rotation.order = 'YXZ';
-    this.camera.rotation.y = this.yaw + this._recoilYaw;
-    this.camera.rotation.x = this.pitch + this._recoilPitch;
+    this.camera.rotation.y = sim.yaw + this._recoilYaw;
+    this.camera.rotation.x = sim.pitch + this._recoilPitch;
     this.camera.rotation.z = bobRoll;
 
     // FOV: ADS pulls in, sprinting pushes out slightly for a sense of speed.
-    const sprintPush = this.sprinting ? 4.5 : 0;
-    const targetFov = THREE.MathUtils.lerp( this.baseFov + sprintPush, this.adsFov, this._adsBlend );
+    const sprintPush = sim.sprinting ? 4.5 : 0;
+    const targetFov = THREE.MathUtils.lerp( this.baseFov + sprintPush, this.adsFov, sim.adsBlend );
     if ( Math.abs( this.camera.fov - targetFov ) > 0.01 ) {
       this.camera.fov = THREE.MathUtils.damp( this.camera.fov, targetFov, 12, dt );
       this.camera.updateProjectionMatrix();
     }
   }
 
-  setAiming( on, dt ) {
-    this.aiming = on;
-    this._adsBlend = THREE.MathUtils.damp( this._adsBlend, on ? 1 : 0, 16, dt );
+  /**
+   * `dt` is no longer used — the blend is simulated, because how far a player
+   * has aimed down sight changes their speed, and speed is everyone's business.
+   * The parameter stays so callers do not have to change.
+   */
+  setAiming( on ) {
+    this._aimHeld = on;
   }
 
-  get adsBlend() { return this._adsBlend; }
-
-  /** Applied by the weapon; decays back to zero in `_updateCamera`. */
+  /** Applied by the weapon; the visual part decays back to zero in `_updateCamera`. */
   addRecoil( pitch, yaw ) {
     this._recoilPitch += pitch;
     this._recoilYaw += yaw;
     // Half the kick is permanent, so sustained fire actually walks the aim up.
-    this.pitch = THREE.MathUtils.clamp( this.pitch + pitch * 0.42, -Math.PI / 2, Math.PI / 2 );
-    this.yaw += yaw * 0.42;
+    // It lands on the simulation's angles, which is what the next command sends.
+    this.sim.pitch = THREE.MathUtils.clamp( this.sim.pitch + pitch * 0.42, -Math.PI / 2, Math.PI / 2 );
+    this.sim.yaw += yaw * 0.42;
   }
 
   /**
@@ -301,25 +202,16 @@ export class Player {
    * geometry is touched, so a restart allocates nothing.
    */
   reset( position = null ) {
-    this.health = 100;
-    this.stamina = this.maxStamina ?? this.stamina;
-    this.velocity.set( 0, 0, 0 );
-    if ( position ) this.position.copy( position );
-    else this.position.copy( this.level.playerStart );
-    this.yaw = 0;
-    this.pitch = 0;
-    this.grounded = true;
-    this.crouching = false;
-    this.sprinting = false;
+    this.sim.respawn( position ?? this._level.playerStart );
+    this.sim.height = STAND_HEIGHT;
     this._landDip = 0;
     this._recoilPitch = 0;
     this._recoilYaw = 0;
+    this._bobAmount = 0;
+    this._aimHeld = false;
   }
 
   damage( amount ) {
-    this.health = Math.max( 0, this.health - amount );
-    return this.health;
+    return this.sim.damage( amount );
   }
-
-  get eyePosition() { return this.camera.position; }
 }

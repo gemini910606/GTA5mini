@@ -52,6 +52,9 @@ class Game {
     this.audio = new Audio( this.camera, this.scene );
 
     this._enemyCtx = { playerPosition: null, elapsed: 0 };
+    this._levelLoading = false;
+
+    this.level.setSignEmission( this.environment.presetSettings.signEmission ?? 1.0 );
 
     this._buildFlashlight();
     this._wireEvents();
@@ -295,7 +298,7 @@ class Game {
 
     if ( input.wasPressed( 'KeyT' ) ) this.cycleTimeOfDay();
     if ( input.wasPressed( 'KeyH' ) ) this.cycleIblSource();
-    if ( input.wasPressed( 'KeyM' ) ) this.cycleLevel();
+    if ( input.wasPressed( 'KeyM' ) && ! this._levelLoading ) this.cycleLevel();
   }
 
   setQuality( name ) {
@@ -321,6 +324,11 @@ class Game {
     return this.setLevel( keys[ ( keys.indexOf( this.levelName ) + 1 ) % keys.length ] );
   }
 
+  /** True while a map that needs the network is still loading. */
+  get levelLoading() {
+    return this._levelLoading;
+  }
+
   /**
    * Swaps in another map.
    *
@@ -329,20 +337,36 @@ class Game {
    * the enemy pool, the pooled impact decals stuck to walls that no longer
    * exist — is re-pointed before the run restarts.
    */
-  setLevel( name ) {
+  async setLevel( name ) {
     const data = LEVELS[ name ];
     if ( ! data ) throw new Error( `Game: unknown level "${ name }"` );
+    if ( this._levelLoading ) return this.levelName;
+
+    // Built before the old one is torn down: a `model` level has to fetch, and
+    // disposing first would leave the player in an empty world until it landed.
+    this._levelLoading = true;
+    let built;
+    try {
+      built = await Level.create( data );
+    } catch ( error ) {
+      this._levelLoading = false;
+      console.error( `Game: level "${ name }" failed to load`, error );
+      return this.levelName;
+    }
+    this._levelLoading = false;
 
     this.scene.remove( this.level.group );
     this.level.dispose();
 
-    this.level = new Level( data );
+    this.level = built;
     this.levelName = name;
     this.scene.add( this.level.group );
 
     this.player.level = this.level;
     this.enemies.level = this.level;
     this.impacts.reset();
+    // The new level's signs have not been told what time it is yet.
+    this.level.setSignEmission( this.environment.presetSettings.signEmission ?? 1.0 );
 
     this.state.restart( this.camera.position );
     this.updateHud();
@@ -352,8 +376,20 @@ class Game {
   cycleTimeOfDay() {
     const keys = Object.keys( TIME_OF_DAY );
     const next = keys[ ( keys.indexOf( this.environment.preset ) + 1 ) % keys.length ];
-    this.environment.applyPreset( next );
+    this._applyTimeOfDay( next );
     return next;
+  }
+
+  /**
+   * Applies a time-of-day preset and everything that hangs off it.
+   *
+   * Sign emission belongs to the level but is decided by the hour: the boards
+   * are decoration at midday and the main light source after dark.
+   */
+  _applyTimeOfDay( name ) {
+    const p = this.environment.applyPreset( name );
+    this.level.setSignEmission( p.signEmission ?? 1.0 );
+    return p;
   }
 
   // -------------------------------------------------------------------------

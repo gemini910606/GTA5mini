@@ -37,12 +37,17 @@ await page.evaluate( ( ibl ) => {
   g.renderer.renderer.setPixelRatio( 1 );
 
   // Read the drawing buffer and reduce it to luma statistics.
-  globalThis.__measure = () => {
+  // `lo`/`hi` select a horizontal band as a fraction of the frame. readPixels
+  // is bottom-up, so 0 to 0.6 is the lower 60%: the street, which is the part
+  // that has to stay readable when the sky does not.
+  globalThis.__measure = ( lo = 0, hi = 1 ) => {
     const gl = g.renderer.renderer.getContext();
-    const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+    const w = gl.drawingBufferWidth, full = gl.drawingBufferHeight;
+    const y0 = Math.floor( full * lo );
+    const h = Math.floor( full * hi ) - y0;
     const px = new Uint8Array( w * h * 4 );
     gl.bindFramebuffer( gl.FRAMEBUFFER, null );
-    gl.readPixels( 0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px );
+    gl.readPixels( 0, y0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px );
 
     const lumas = new Float64Array( w * h );
     let clipped = 0;
@@ -102,5 +107,53 @@ for ( const [ preset, exp, env, sun, hemi ] of SWEEP ) {
   if ( SAVE ) await page.screenshot( { path: `shots/probe-${ tag }.png` } );
 }
 
+// --- sun glare -------------------------------------------------------------
+//
+// The sweep above uses the `courtyard` pose, which has the sun behind it. That
+// is why a bloom flood off the solar disc sat in the build unnoticed until
+// someone played facing west: the instrument was never pointed at the problem.
+//
+// What is measured is not the brightness of the sky -- a sky with the sun in
+// it is supposed to be bright -- but how much the glare lifts the street
+// underneath, against the same street with the sun behind the camera. Above
+// about 1.5x the crates and facades wash out to flat white and you cannot see
+// what you are shooting at.
+
+// Measured at this tool's own 480x270, where the bloom mip chain spreads wider
+// than it does at a play resolution: goldenHour sits at 1.39x here and 1.25x at
+// 720x405. 1.45 leaves headroom over the conservative reading without leaving
+// room for the flood this check exists to catch.
+const GLARE_LIMIT = 1.45;
+const glare = [];
+
+console.log( '\nsun glare, lower 60% of frame' );
+console.log( 'preset        facing    away   ratio' );
+
+for ( const preset of [ 'goldenHour', 'noon', 'dusk', 'night' ] ) {
+  const row = await page.evaluate( ( p ) => {
+    const g = globalThis.__GAME__;
+    g.environment.applyPreset( p );
+    const d = g.environment.sunDirection;
+    const yaw = Math.atan2( -d.x, -d.z );
+    g.poseCamera( { position: [ 0, 0, 26 ], yaw, pitch: 0 } );
+    const facing = globalThis.__measure( 0, 0.6 );
+    g.poseCamera( { position: [ 0, 0, 26 ], yaw: yaw + Math.PI * 0.75, pitch: 0 } );
+    const away = globalThis.__measure( 0, 0.6 );
+    return { facing: facing.mean, away: away.mean };
+  }, preset );
+
+  const ratio = row.facing / row.away;
+  glare.push( { preset, ratio } );
+  console.log( `${ preset.padEnd( 12 ) } ${ fmt( row.facing ) } ${ fmt( row.away ) } ${ ratio.toFixed( 2 ) }x`
+    + ( ratio > GLARE_LIMIT ? '  OVER' : '' ) );
+}
+
 await browser.close();
 server.close();
+
+const over = glare.filter( g => g.ratio > GLARE_LIMIT );
+if ( over.length ) {
+  console.error( `\nglare over ${ GLARE_LIMIT }x: `
+    + over.map( g => `${ g.preset } ${ g.ratio.toFixed( 2 ) }x` ).join( ', ' ) );
+  process.exit( 1 );
+}
