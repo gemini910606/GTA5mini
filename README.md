@@ -107,5 +107,12 @@ npm run dev
   原始壓縮檔 600 MB，不在 repo 裡；工具檔頭寫了下載方式。
   每張關卡 JSON 自己帶著 `attribution` 與 `source` 欄位。
 
+`Model Kit` 這張關卡是 `model` 元素的示範,用的是**會在執行期下載**的模型 ——
+它是唯一不進離線單檔版的關卡：
+
+- **City Kit (Suburban)** — [Kenney](https://kenney.nl/assets/city-kit-suburban)，授權 CC0
+  （商用可、不要求署名，仍然註明）。放在 `public/models/`，build 時複製進 `dist/`。
+  換成自己的模型就是改 `src/world/levels/modelkit.json` 的 `url`。
+
 （單檔打包與守著它的 `check:artifact` 已經移除，見 `docs/TASKS.md` 的 T-14。
 內嵌這件事本身沒變，但「零網路請求」現在沒有測試在把關了。）

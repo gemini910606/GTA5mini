@@ -73,6 +73,8 @@ function solidBox( { size, pos, rotY = 0 }, out ) {
 export function collidersFrom( data ) {
   const boxes = [];
   const shapes = [];
+  /** Element types whose collision this cannot derive. See `model` below. */
+  const incomplete = [];
 
   for ( const element of data.elements ) {
     switch ( element.type ) {
@@ -133,11 +135,24 @@ export function collidersFrom( data ) {
       case 'signs':
       case 'pointLight': break;
 
+      // Deliberately not derived. A `model` element's collision comes from the
+      // bounding boxes of the meshes inside a glTF file, and reading that here
+      // would mean a glTF parser and a file fetch in whatever runtime this is.
+      //
+      // The consequence is real and worth stating plainly: a level using
+      // `model` cannot be simulated headlessly, so it cannot be an
+      // authoritative server's map until its collision is baked into the JSON
+      // at build time. Reported rather than thrown, so a client-only tool can
+      // still ask about the rest of the level.
+      case 'model':
+        if ( ! incomplete.includes( 'model' ) ) incomplete.push( 'model' );
+        break;
+
       default: throw new Error( `LevelColliders: unknown element type "${ element.type }"` );
     }
   }
 
-  return { boxes, shapes };
+  return { boxes, shapes, incomplete };
 }
 
 /** Spawn points and the player start, as plain vectors. */

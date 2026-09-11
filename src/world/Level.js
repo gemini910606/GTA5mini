@@ -2,10 +2,12 @@ import * as THREE from 'three';
 import { makeSurface, panelPattern, metalPattern, windowPattern, makeSignAtlas } from './Textures.js';
 import { Colliders } from './Colliders.js';
 import { buildPrisms, buildSignBoards } from './PrismGeometry.js';
+import { loadModel, placeModel } from './Models.js';
 import arena from './levels/arena.json';
 import kabukicho from './levels/kabukicho.json';
 import daikyocho from './levels/daikyocho.json';
 import shinjuku1 from './levels/shinjuku1.json';
+import modelkit from './levels/modelkit.json';
 
 /**
  * Every map the build knows about, in cycle order.
@@ -13,8 +15,13 @@ import shinjuku1 from './levels/shinjuku1.json';
  * The three Tokyo maps are Project PLATEAU LOD1 extracts converted by
  * `tools/build-plateau.mjs`; see each file's `source` block for the exact
  * coordinates and mesh tiles, and README.md for the attribution.
+ *
+ * `modelkit` is the one that fetches: it demonstrates the `model` element
+ * against downloaded glTF, and is the template to edit when swapping in an
+ * asset of your own. It is also the only level that does not survive into the
+ * offline single-file build -- see `Models.js`.
  */
-export const LEVELS = { arena, kabukicho, shinjuku1, daikyocho };
+export const LEVELS = { arena, kabukicho, shinjuku1, daikyocho, modelkit };
 
 /**
  * Builds a level from a JSON description.
@@ -87,6 +94,8 @@ export class Level {
     this.colliderShapes = [];
     /** Sign materials, so a time-of-day change can drive their emission. */
     this._signMaterials = [];
+    /** `model` elements awaiting `resolveModels`. */
+    this._pendingModels = [];
     /** @type {THREE.Object3D[]} */
     this.hittables = [];
     /** @type {THREE.Vector3[]} */
@@ -111,6 +120,60 @@ export class Level {
      * the same answers.
      */
     this.broadphase = new Colliders( this.colliders, this.colliderShapes );
+  }
+
+  /**
+   * Builds a level, including any `model` elements.
+   *
+   * The constructor stays synchronous because everything else is: procedural
+   * textures, prisms and signs all resolve immediately, and a level made of
+   * those is finished the moment `new Level` returns. Only glTF needs the
+   * network, so only levels that use it need awaiting -- which is why this is a
+   * factory rather than the constructor becoming async for everyone.
+   */
+  static async create( data ) {
+    const level = new Level( data );
+    await level.resolveModels();
+    return level;
+  }
+
+  /**
+   * Loads and places every deferred `model` element.
+   *
+   * The broad phase is rebuilt afterwards rather than appended to: it indexes
+   * the collider array at construction, so colliders arriving later have to be
+   * indexed with the rest.
+   */
+  async resolveModels() {
+    if ( ! this._pendingModels.length ) return this;
+
+    for ( const element of this._pendingModels ) {
+      const source = await loadModel( element.url );
+      // A single placement is just an instance list of one.
+      const instances = element.instances ?? [ [
+        ...( element.pos ?? [ 0, 0, 0 ] ), element.rotY ?? 0, element.scale ?? 1,
+      ] ];
+
+      for ( const [ x, y, z, rotY = 0, scale = element.scale ?? 1 ] of instances ) {
+        const { group, boxes } = placeModel( source, {
+          pos: [ x, y, z ], rotY, scale,
+          collide: element.collide !== false,
+          cast: element.cast !== false,
+          receive: element.receive !== false,
+        } );
+        group.name = element.name ?? `Model:${ element.url }`;
+        this.group.add( group );
+        if ( element.hittable !== false ) this.hittables.push( group );
+        for ( const b of boxes ) {
+          this.colliders.push( b );
+          this.colliderShapes.push( null );
+        }
+      }
+    }
+
+    this._pendingModels.length = 0;
+    this.broadphase = new Colliders( this.colliders, this.colliderShapes );
+    return this;
   }
 
   // --- materials -----------------------------------------------------------
@@ -158,6 +221,9 @@ export class Level {
       case 'instanced': return this._instanced( element );
       case 'prisms': return this._prisms( element );
       case 'signs': return this._signs( element );
+      // Deferred: this one needs the network, and the constructor does not
+      // wait. `Level.create` resolves them; see `resolveModels`.
+      case 'model': return this._pendingModels.push( element );
       case 'pointLight': return this._pointLight( element );
       default: throw new Error( `Level: unknown element type "${ element.type }"` );
     }

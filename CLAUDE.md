@@ -42,7 +42,9 @@ npm test         # 無頭檢查：碰撞粗篩 vs 線性掃描、prism 面朝向
 2. **單人模式不發外部網路請求。** 資產一律程序生成，或在 build 前轉成 repo 內的檔案
    （`hdri.generated.js` 的 base64、`levels/*.json` 的建築）。轉檔工具可以連網，
    單人遊玩路徑上的程式碼不行——單檔離線版必須永遠成立。
-   連線只在玩家**主動**加入房間時建立，而且不得有任何資產靠它下載。
+   連線只在玩家**主動**加入房間時建立。
+   唯一的例外是 `model` 元素（外部 glTF）：**只有用到它的關卡**放棄離線保證，
+   其他關卡不受影響。新增這類關卡時要在 README 標示來源與授權。
 3. **不要動 `core/Renderer.js` 的 pass 順序**，除非 ticket 明確授權——
    bloom 必須在 tone mapping 之前，顆粒必須在抗鋸齒之後。理由見 SPEC §4。
 4. **每幀更新路徑不得配置記憶體。** `step()` / `update()` / `render()` 裡不准 `new`。
@@ -71,6 +73,10 @@ npm test         # 無頭檢查：碰撞粗篩 vs 線性掃描、prism 面朝向
 - **`Level` 與 `LevelColliders` 是同一個碰撞世界的兩份推導。** 客戶端從建好的 mesh 推，
   伺服器沒有 canvas 只能從 JSON 推。`npm run shots:levels` 會逐個盒子比對兩者，
   改任一邊都要跑。
+- **`Game.setLevel` 是 async**（`model` 關卡要下載）。在 `page.evaluate` 裡忘了 `await`，
+  測出來的每一列都會是**上一張地圖**的數字，而且完全不會報錯。
+- **下載來的 GLB 未必自足。** Kenney 的模型外部參照 `Textures/colormap.png`，
+  少了它只有 console 警告、模型照樣渲染，只是沒貼圖。
 - **`makeSurface` 的快取鍵**曾經用 `pattern.toString()`，但所有 `panelPattern` 閉包的
   原始碼字串都一樣，只差參數的兩種立面會共用同一張貼圖。pattern 工廠現在會掛 `fn.key`，
   新增 pattern 種類時**記得也掛**。

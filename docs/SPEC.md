@@ -227,6 +227,8 @@ npm run shots          # headless Chromium 截圖 + smoke test，任何 console 
 | `ramp` | `material`, `base`, `width`, `height`, `run`, `steps?` | 階梯式斜坡，展開成 `steps` 個盒子 |
 | `instanced` | `material`, `geometry`, `transforms`, `colliderSize?`, `collide?`, `cast?` | 一個 `InstancedMesh`；`transforms` 是 `[x, y, z, rotY]` 陣列 |
 | `prisms` | `material`, `buildings`, `uvScale?`, `collide?`, `cast?`, `receive?`, `hittable?`, `name?` | 一組擠出的多邊形柱體，合併成**單一** `BufferGeometry` |
+| `signs` | `boards`, `atlas?`, `emissiveIntensity?`, `name?` | 招牌看板，合併成單一幾何 + 單一圖集 |
+| `model` | `url`, `instances?` \| `pos`+`rotY`+`scale`, `collide?`, `cast?`, `receive?`, `hittable?` | 外部 glTF。**唯一會在執行期發請求的元素** |
 | `pointLight` | `color`, `intensity`, `distance`, `decay`, `pos` | 點光源 |
 
 `geometry` 為 `{ kind: "box", size }` 或 `{ kind: "barrier" }`。
@@ -318,4 +320,37 @@ arena 的 54 個碰撞盒可以線性掃描：每個實體、每軸、每個 sub
 `Level` 從建好的 mesh 推碰撞盒（SPEC §11），但它需要 canvas 產貼圖，伺服器跑不了。
 `world/LevelColliders.js` 是同一套推導的無頭版，直接吃關卡 JSON，
 `PrismGeometry` 兩邊共用。`npm run shots:levels` 逐個盒子比對兩者，目前四張地圖全為 0 誤差。
+
+### `signs`：招牌
+
+`boards` 是攤平的七元組 `[ x, y, z, rotY, w, h, cell ]`：招牌底部中心、所在牆面**外法線**的 yaw、
+公尺尺寸,以及要印圖集裡的哪一格。擺放由 `tools/build-plateau.mjs` 算出來。
+
+板子上的記號**刻意不是文字**。真的假名需要內嵌 CJK 字型,而用系統字型跑 `fillText`
+在每台機器結果不同、在無頭 runner 上根本沒有。遊戲裡實際的觀看距離下,
+讀得出來的是「飽和色塊 + 裡面一疊深色記號」,真的可讀反而是沒人看得到的細節。
+
+招牌用同一張貼圖同時當 `map` 和 `emissiveMap`,所以亮的部分會發光、外框不會。
+沒有另一套夜間材質:正午時陽光蓋過自發光,入夜後它就是街上主要的光。真的招牌也是這樣。
+
+### `model`：外部 glTF
+
+**這是整個專案唯一在執行期發網路請求的地方**,而且是刻意收窄的。硬性規則 2 是
+「單人路徑零外部請求、離線單檔版必須成立」;用了 `model` 的關卡放棄後半句,而且**只有那張關卡**。
+arena 和三張 PLATEAU 地圖不受影響,仍然打包得成可以雙擊開的單一檔案。
+
+`GLTFLoader` 隨 `three` 套件出貨,只 import three 自己的 utils,所以規則 1 沒破。
+**不支援 DRACO / KTX2 壓縮** —— 兩者都要另外託管一個解碼器,那是第二份資產和第二個會壞的東西;
+需要壓縮的模型請重新匯出成未壓縮版。
+
+`Level` 的建構子維持同步(其他元素都是立即完成的),只有這個需要等,
+所以用 `await Level.create( data )` 工廠而不是讓建構子對所有人變成 async。
+
+**限制**:碰撞取 glTF 裡每個 mesh 的世界 AABB。這和關卡其他部分是同一個取捨,
+但對匯入模型更不合身 —— 一個拱門或樓梯間的包圍盒幾乎沒有意義。
+中間有大洞的模型請在匯出時拆成多個部件,或設 `collide: false` 自己擺盒子。
+
+而且 `world/LevelColliders.js` **推導不出 `model` 的碰撞**(那需要在無頭環境裡跑 glTF 解析器),
+所以**用了 `model` 的關卡不能當權威伺服器的地圖**,除非把碰撞在 build 時烘進 JSON。
+`collidersFrom` 會在回傳值的 `incomplete` 裡標出來,不是默默跳過。
 

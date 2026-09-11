@@ -40,8 +40,8 @@ const rnd = () => ( seed = ( seed * 1664525 + 1013904223 ) >>> 0 ) / 4294967296;
 function world( file ) {
   const data = JSON.parse( readFileSync( `src/world/levels/${ file }`, 'utf8' ) );
   const { playerStart } = spawnsFrom( data );
-  const { boxes, shapes } = collidersFrom( data );
-  return { data, colliders: new Colliders( boxes, shapes ), playerStart };
+  const { boxes, shapes, incomplete } = collidersFrom( data );
+  return { data, colliders: new Colliders( boxes, shapes ), playerStart, incomplete };
 }
 
 /**
@@ -129,7 +129,8 @@ console.log( 'command codec' );
 console.log( 'replay determinism' );
 for ( const file of readdirSync( 'src/world/levels' ).sort() ) {
   if ( ! file.endsWith( '.json' ) ) continue;
-  const { colliders, playerStart } = world( file );
+  const { colliders, playerStart, incomplete } = world( file );
+  if ( incomplete.length ) { console.log( `  skip ${ file } (${ incomplete.join( ', ' ) } needs a loader)` ); continue; }
   const before = failures;
 
   const commands = commandStream( 900 );

@@ -41,9 +41,11 @@ const baseline = await page.evaluate( () => globalThis.__GAME__.renderer.info.me
 
 const rows = [];
 for ( const name of names ) {
-  const info = await page.evaluate( n => {
+  // `setLevel` is async -- a `model` level fetches -- so this must await it or
+  // every row reports the previous map's numbers.
+  const info = await page.evaluate( async n => {
     const g = globalThis.__GAME__;
-    g.setLevel( n );
+    await g.setLevel( n );
     const start = g.level.playerStart;
     // Standing at the spawn: if the converter put the player inside a building
     // this is where it shows.
@@ -90,8 +92,8 @@ const settle = async () => {
 await page.evaluate( () => globalThis.__GAME__.setLevel( 'arena' ) );
 const oneCycle = await settle();
 for ( let i = 0; i < 2; i ++ ) {
-  for ( const n of names ) await page.evaluate( x => globalThis.__GAME__.setLevel( x ), n );
-  await page.evaluate( () => globalThis.__GAME__.setLevel( 'arena' ) );
+  for ( const n of names ) await page.evaluate( async x => { await globalThis.__GAME__.setLevel( x ); }, n );
+  await page.evaluate( async () => { await globalThis.__GAME__.setLevel( 'arena' ); } );
 }
 const after = await settle();
 
@@ -101,7 +103,11 @@ const after = await settle();
 // everywhere else, so they are held to each other box for box.
 const mismatches = [];
 for ( const r of rows ) {
-  const { boxes: headless } = collidersFrom( JSON.parse( readFileSync( `src/world/levels/${ r.name }.json`, 'utf8' ) ) );
+  const { boxes: headless, incomplete } = collidersFrom( JSON.parse( readFileSync( `src/world/levels/${ r.name }.json`, 'utf8' ) ) );
+  if ( incomplete.length ) {
+    console.log( `  collidersFrom skips ${ r.name }: cannot derive ${ incomplete.join( ', ' ) } headlessly` );
+    continue;
+  }
   const flat = headless.flatMap( b => [ b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z ] );
   if ( flat.length !== r.boxes.length ) {
     mismatches.push( `${ r.name }: Level built ${ r.boxes.length / 6 } colliders, collidersFrom built ${ flat.length / 6 }` );

@@ -52,6 +52,7 @@ class Game {
     this.audio = new Audio( this.camera, this.scene );
 
     this._enemyCtx = { playerPosition: null, elapsed: 0 };
+    this._levelLoading = false;
 
     this.level.setSignEmission( this.environment.presetSettings.signEmission ?? 1.0 );
 
@@ -297,7 +298,7 @@ class Game {
 
     if ( input.wasPressed( 'KeyT' ) ) this.cycleTimeOfDay();
     if ( input.wasPressed( 'KeyH' ) ) this.cycleIblSource();
-    if ( input.wasPressed( 'KeyM' ) ) this.cycleLevel();
+    if ( input.wasPressed( 'KeyM' ) && ! this._levelLoading ) this.cycleLevel();
   }
 
   setQuality( name ) {
@@ -323,6 +324,11 @@ class Game {
     return this.setLevel( keys[ ( keys.indexOf( this.levelName ) + 1 ) % keys.length ] );
   }
 
+  /** True while a map that needs the network is still loading. */
+  get levelLoading() {
+    return this._levelLoading;
+  }
+
   /**
    * Swaps in another map.
    *
@@ -331,14 +337,28 @@ class Game {
    * the enemy pool, the pooled impact decals stuck to walls that no longer
    * exist — is re-pointed before the run restarts.
    */
-  setLevel( name ) {
+  async setLevel( name ) {
     const data = LEVELS[ name ];
     if ( ! data ) throw new Error( `Game: unknown level "${ name }"` );
+    if ( this._levelLoading ) return this.levelName;
+
+    // Built before the old one is torn down: a `model` level has to fetch, and
+    // disposing first would leave the player in an empty world until it landed.
+    this._levelLoading = true;
+    let built;
+    try {
+      built = await Level.create( data );
+    } catch ( error ) {
+      this._levelLoading = false;
+      console.error( `Game: level "${ name }" failed to load`, error );
+      return this.levelName;
+    }
+    this._levelLoading = false;
 
     this.scene.remove( this.level.group );
     this.level.dispose();
 
-    this.level = new Level( data );
+    this.level = built;
     this.levelName = name;
     this.scene.add( this.level.group );
 

@@ -122,7 +122,8 @@ console.log( 'level JSON' );
 for ( const file of readdirSync( 'src/world/levels' ).sort() ) {
   if ( ! file.endsWith( '.json' ) ) continue;
   const data = JSON.parse( readFileSync( `src/world/levels/${ file }`, 'utf8' ) );
-  const { boxes, shapes } = collidersFrom( data );
+  const { boxes, shapes, incomplete } = collidersFrom( data );
+  if ( incomplete.length ) { console.log( `  skip ${ file } (${ incomplete.join( ', ' ) } needs a loader)` ); continue; }
   if ( ! boxes.length ) { console.log( `  skip ${ file } (no colliders)` ); continue; }
   exercise( file, boxes, 30000, shapes );
 }
