@@ -23,7 +23,7 @@ export class Player {
     this.camera = camera;
     this.level = level;
 
-    this.position = new THREE.Vector3( 0, 0, 26 );
+    this.position = level.playerStart.clone();
     this.velocity = new THREE.Vector3();
     // forward = ( -sin(yaw), 0, -cos(yaw) ), so yaw 0 looks down -Z, which is
     // into the courtyard from the southern spawn.
@@ -68,18 +68,15 @@ export class Player {
   // -------------------------------------------------------------------------
 
   _boxAt( x, y, z, height = this.height ) {
-    return this._tmpBox.set(
-      new THREE.Vector3( x - RADIUS, y, z - RADIUS ),
-      new THREE.Vector3( x + RADIUS, y + height, z + RADIUS ),
-    );
+    // Written in place: `Box3.set` copies its arguments, so building two fresh
+    // vectors here would allocate twice on every collision probe.
+    this._tmpBox.min.set( x - RADIUS, y, z - RADIUS );
+    this._tmpBox.max.set( x + RADIUS, y + height, z + RADIUS );
+    return this._tmpBox;
   }
 
   _collidesAt( x, y, z, height = this.height ) {
-    const box = this._boxAt( x, y, z, height );
-    for ( const c of this.level.colliders ) {
-      if ( box.intersectsBox( c ) ) return c;
-    }
-    return null;
+    return this.level.broadphase.first( this._boxAt( x, y, z, height ) );
   }
 
   /**
@@ -308,7 +305,7 @@ export class Player {
     this.stamina = this.maxStamina ?? this.stamina;
     this.velocity.set( 0, 0, 0 );
     if ( position ) this.position.copy( position );
-    else this.position.set( 0, 0, 26 );
+    else this.position.copy( this.level.playerStart );
     this.yaw = 0;
     this.pitch = 0;
     this.grounded = true;

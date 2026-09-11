@@ -87,10 +87,9 @@ function approachAngle( from, to, maxStep ) {
 }
 
 // Scratch vectors: the sight test runs on the update path and must not allocate.
-const _ray = new THREE.Ray();
 const _from = new THREE.Vector3();
 const _dir = new THREE.Vector3();
-const _hit = new THREE.Vector3();
+const _box = new THREE.Box3();
 const _desired = new THREE.Vector3();
 const _toTarget = new THREE.Vector3();
 const _strafe = new THREE.Vector3();
@@ -492,17 +491,9 @@ class Enemy {
     const range = _dir.length();
     if ( range < 1e-4 ) return true;
 
-    _ray.set( from, _dir.divideScalar( range ) );
-
-    for ( const box of level.colliders ) {
-      // A box the muzzle is already inside cannot occlude this shot — an enemy
-      // clipped into a barrier would otherwise be permanently blind.
-      if ( box.containsPoint( from ) ) continue;
-      if ( _ray.intersectBox( box, _hit ) && _hit.distanceToSquared( from ) < range * range ) {
-        return false;
-      }
-    }
-    return true;
+    // The broad phase walks the grid along the ray and skips any box the muzzle
+    // is inside — an enemy clipped into a barrier would otherwise be blind.
+    return ! level.broadphase.blocked( from, _dir.divideScalar( range ), range );
   }
 
   _updateDead( dt, ctx ) {
@@ -542,15 +533,15 @@ class Enemy {
   }
 
   _boxAt( x, y, z ) {
-    return new THREE.Box3(
-      new THREE.Vector3( x - this.radius, y + 0.05, z - this.radius ),
-      new THREE.Vector3( x + this.radius, y + this.height, z + this.radius ),
-    );
+    // Written in place into a module-level box: this runs twice per enemy per
+    // substep, and `new Box3( new Vector3, new Vector3 )` is three allocations.
+    _box.min.set( x - this.radius, y + 0.05, z - this.radius );
+    _box.max.set( x + this.radius, y + this.height, z + this.radius );
+    return _box;
   }
 
   _collides( x, y, z, level ) {
-    const box = this._boxAt( x, y, z );
-    return level.colliders.some( c => box.intersectsBox( c ) );
+    return level.broadphase.intersects( this._boxAt( x, y, z ) );
   }
 
   _moveWithCollision( dx, dz, level ) {
@@ -591,6 +582,8 @@ export class EnemyManager {
     this.kills = 0;
     this._spawnCursor = 0;
     this.onEnemyFire = null;
+    /** Reused per-frame context handed to every enemy; see `update`. */
+    this._sharedCtx = { playerPosition: null, elapsed: 0, level: null, onEnemyFire: null };
 
     /** Where the last noticeable noise came from, and how long ago. */
     this.commotion = new THREE.Vector3();
@@ -693,8 +686,14 @@ export class EnemyManager {
 
   update( dt, ctx ) {
     this.commotionAge += dt;
+    // One context object reused for every enemy, every frame. `Object.assign`
+    // writes into it rather than spreading a fresh literal per enemy.
+    const shared = this._sharedCtx;
+    Object.assign( shared, ctx );
+    shared.level = this.level;
+    shared.onEnemyFire = this.onEnemyFire;
     for ( const e of this.enemies ) {
-      const result = e.update( dt, { ...ctx, level: this.level, onEnemyFire: this.onEnemyFire } );
+      const result = e.update( dt, shared );
       if ( result === 'respawn' && this.autoRespawn ) this.spawnOne( ctx.playerPosition );
     }
   }

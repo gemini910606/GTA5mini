@@ -1,6 +1,20 @@
 import * as THREE from 'three';
-import { makeSurface, panelPattern, metalPattern } from './Textures.js';
+import { makeSurface, panelPattern, metalPattern, windowPattern } from './Textures.js';
+import { Colliders } from './Colliders.js';
+import { buildPrisms } from './PrismGeometry.js';
 import arena from './levels/arena.json';
+import kabukicho from './levels/kabukicho.json';
+import daikyocho from './levels/daikyocho.json';
+import shinjuku1 from './levels/shinjuku1.json';
+
+/**
+ * Every map the build knows about, in cycle order.
+ *
+ * The three Tokyo maps are Project PLATEAU LOD1 extracts converted by
+ * `tools/build-plateau.mjs`; see each file's `source` block for the exact
+ * coordinates and mesh tiles, and README.md for the attribution.
+ */
+export const LEVELS = { arena, kabukicho, shinjuku1, daikyocho };
 
 /**
  * Builds a level from a JSON description.
@@ -13,10 +27,15 @@ import arena from './levels/arena.json';
  * low hundreds of draw calls.
  *
  * Element types are primitives, not level-specific cases: `box`, `ramp`,
- * `instanced`, `pointLight`. Anything the arena expressed as a build-time loop
- * (the 108 facade windows, the stepped ramps) is either flattened into an
- * instanced transform list or covered by `ramp`, so adding a second map needs
- * no engine change.
+ * `instanced`, `prisms`, `pointLight`. Anything the arena expressed as a
+ * build-time loop (the 108 facade windows, the stepped ramps) is either
+ * flattened into an instanced transform list or covered by `ramp`, so adding a
+ * second map needs no engine change.
+ *
+ * `prisms` is what a real city is made of: an extruded polygon footprint. The
+ * PLATEAU maps are hundreds of those, so every prism in one element merges into
+ * a single BufferGeometry — the budget that binds here is draw calls, not
+ * triangles (SPEC §5).
  *
  * See docs/SPEC.md for the schema.
  */
@@ -45,6 +64,8 @@ function barrierGeometry() {
 
 const hex = v => ( typeof v === 'string' ? parseInt( v, 16 ) : v );
 
+const _scratch = new THREE.Box3();
+
 // ---------------------------------------------------------------------------
 
 export class Level {
@@ -71,6 +92,16 @@ export class Level {
     for ( const element of data.elements ) this._add( element );
 
     this.spawnPoints = data.spawnPoints.map( p => new THREE.Vector3( ...p ) );
+
+    /** Where the player starts; the arena's southern approach if unstated. */
+    this.playerStart = new THREE.Vector3( ...( data.playerStart ?? [ 0, 0, 26 ] ) );
+
+    /**
+     * Broad phase over `colliders`. The array stays the source of truth — the
+     * grid is an index over it, and `tools/test-colliders.mjs` holds the two to
+     * the same answers.
+     */
+    this.broadphase = new Colliders( this.colliders );
   }
 
   // --- materials -----------------------------------------------------------
@@ -79,6 +110,7 @@ export class Level {
     if ( ! p ) return null;
     switch ( p.kind ) {
       case 'panel': return panelPattern( p.cols, p.rows, p.groove, p.offsetAlternate );
+      case 'window': return windowPattern( p.cols, p.rows, p );
       case 'metal': return metalPattern( p.ridges );
       default: throw new Error( `Level: unknown pattern kind "${ p.kind }"` );
     }
@@ -87,7 +119,11 @@ export class Level {
   _material( def ) {
     if ( def.kind === 'surface' ) {
       const { pattern, ...surface } = def.surface;
-      const params = makeSurface( { ...surface, pattern: this._pattern( pattern ) } );
+      // Copied, not used in place: `makeSurface` caches and returns the same
+      // object for identical inputs, so writing the overrides straight onto it
+      // would leak one level's metalness into another level that shares the
+      // surface definition but omits the override.
+      const params = { ...makeSurface( { ...surface, pattern: this._pattern( pattern ) } ) };
       if ( def.metalness !== undefined ) params.metalness = def.metalness;
       if ( def.roughness !== undefined ) params.roughness = def.roughness;
       if ( def.normalScale ) params.normalScale = new THREE.Vector2( ...def.normalScale );
@@ -111,6 +147,7 @@ export class Level {
       case 'box': return this._solid( element );
       case 'ramp': return this._ramp( element );
       case 'instanced': return this._instanced( element );
+      case 'prisms': return this._prisms( element );
       case 'pointLight': return this._pointLight( element );
       default: throw new Error( `Level: unknown element type "${ element.type }"` );
     }
@@ -132,14 +169,15 @@ export class Level {
    * A solid box: mesh + collider + raycast target.
    * `size` and `pos` are metres, `pos` is the box centre.
    */
-  _solid( { material, size, pos, collide = true, rotY = 0, receive = true, cast = true, name } ) {
+  _solid( { material, size, pos, collide = true, rotY = 0, receive = true, cast = true, visible = true, name } ) {
     const mesh = new THREE.Mesh(
       new THREE.BoxGeometry( size[ 0 ], size[ 1 ], size[ 2 ] ), this._materials[ material ],
     );
     mesh.position.set( pos[ 0 ], pos[ 1 ], pos[ 2 ] );
     mesh.rotation.y = rotY;
-    mesh.castShadow = cast;
-    mesh.receiveShadow = receive;
+    mesh.castShadow = cast && visible;
+    mesh.receiveShadow = receive && visible;
+    mesh.visible = visible;
     if ( name ) mesh.name = name;
     mesh.updateMatrixWorld( true );
     this.group.add( mesh );
@@ -149,7 +187,9 @@ export class Level {
       // prop is either a ramp or a decorative panel the player cannot reach.
       this.colliders.push( new THREE.Box3().setFromObject( mesh ) );
     }
-    this.hittables.push( mesh );
+    // An invisible box is a boundary wall: it should stop the player without
+    // catching bullets, or shots at the skyline would spark on thin air.
+    if ( visible ) this.hittables.push( mesh );
     return mesh;
   }
 
@@ -214,6 +254,28 @@ export class Level {
     return mesh;
   }
 
+  /**
+   * Extruded polygon footprints, merged into one geometry.
+   *
+   * Walls get UVs in metres so a shopfront and an office block share a texture
+   * without either looking stretched; the roof is projected straight down. The
+   * bottom cap is skipped — it is never visible and it is a third of the
+   * triangles. The geometry itself is built by `PrismGeometry`, which has no
+   * canvas or WebGL dependency so the winding can be tested headlessly.
+   */
+  _prisms( { material, buildings, uvScale = 6, collide = true, cast = true, receive = true, hittable = true, name } ) {
+    const { geometry, boxes } = buildPrisms( buildings, uvScale );
+    if ( collide ) for ( const b of boxes ) this.colliders.push( b );
+
+    const mesh = new THREE.Mesh( geometry, this._materials[ material ] );
+    mesh.castShadow = cast;
+    mesh.receiveShadow = receive;
+    mesh.name = name ?? `Prisms:${ material }`;
+    this.group.add( mesh );
+    if ( hittable ) this.hittables.push( mesh );
+    return mesh;
+  }
+
   _pointLight( { color, intensity, distance, decay, pos } ) {
     const light = new THREE.PointLight( hex( color ), intensity, distance, decay );
     light.position.set( pos[ 0 ], pos[ 1 ], pos[ 2 ] );
@@ -223,8 +285,38 @@ export class Level {
 
   // -------------------------------------------------------------------------
 
+  /**
+   * Releases the geometry this level built.
+   *
+   * Textures are deliberately left alone: `makeSurface` caches them by their
+   * definition, so the three city maps share one set, and disposing them here
+   * would hand the next level a dead texture. The cache is bounded by the
+   * number of distinct surface definitions in the build, not by how many times
+   * the player cycles maps.
+   */
+  dispose() {
+    this.group.traverse( o => o.geometry?.dispose() );
+    for ( const m of Object.values( this._materials ) ) m.dispose();
+    this.group.clear();
+    this.colliders.length = 0;
+    this.hittables.length = 0;
+  }
+
   /** Cheap "is this AABB clear" test used by enemy spawning. */
   isClear( box ) {
-    return ! this.colliders.some( c => c.intersectsBox( box ) );
+    return ! this.broadphase.intersects( box );
+  }
+
+  /**
+   * Whether someone player-sized could stand at ( x, y, z ).
+   *
+   * `y` is the floor they stand on, not their eyeline — the arena spawns two
+   * of its enemies on top of platforms, and a test that assumed ground level
+   * called both of them blocked. The box matches `Enemy._boxAt`.
+   */
+  isStandingClear( x, y, z, height = 1.82, radius = 0.4 ) {
+    _scratch.min.set( x - radius, y + 0.05, z - radius );
+    _scratch.max.set( x + radius, y + height, z + radius );
+    return this.isClear( _scratch );
   }
 }

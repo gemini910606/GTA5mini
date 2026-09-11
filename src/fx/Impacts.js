@@ -231,6 +231,23 @@ export class Impacts {
 
   // -------------------------------------------------------------------------
 
+  /**
+   * Parks every pooled effect. Used when the level changes: a decal is pinned
+   * to a world position, and the wall it was on no longer exists.
+   */
+  reset() {
+    for ( const pool of [ this._tracers, this._decals, this._puffs ] ) {
+      for ( const item of pool ) {
+        item.life = 0;
+        item.mesh.visible = false;
+      }
+    }
+    this._sparkLife.fill( 0 );
+    const pos = this._sparks.geometry.attributes.position.array;
+    for ( let i = 0; i < pos.length; i += 3 ) pos[ i + 1 ] = -1000;
+    this._sparks.geometry.attributes.position.needsUpdate = true;
+  }
+
   update( dt, camera ) {
     // Tracers
     for ( const t of this._tracers ) {

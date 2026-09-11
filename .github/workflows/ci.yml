@@ -20,6 +20,13 @@ jobs:
 
       - run: npm ci
 
+      # First, because it is pure Node and takes a couple of seconds: the
+      # collision broad phase against its linear reference, and the face winding
+      # of every prism in every level. Both failures are invisible in a
+      # screenshot, so they must not sit behind the slow browser jobs.
+      - name: Geometry tests
+        run: npm test
+
       # The harnesses drive real Chromium with SwiftShader, so the browser has
       # to be present. --with-deps pulls the shared libraries the runner lacks.
       - name: Install Chromium
@@ -38,7 +45,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: failure-screenshots
-          path: shots/*.png
+          path: shots/**/*.png
           if-no-files-found: ignore
 
   # Split out rather than appended to `verify`: it is by far the slowest thing
@@ -76,6 +83,12 @@ jobs:
       - name: Screenshots
         run: npm run shots
 
+      # Every map, not just the arena: budget table, spawn legality, and that
+      # cycling maps disposes what it replaces. Level switching is the only path
+      # that rebuilds the world, so it is the only place a leak can appear.
+      - name: Screenshots (levels)
+        run: npm run shots:levels
+
       # The point of running this in CI is being able to look at the output.
       # About 9 MB a run, hence the short retention -- these are for eyeballing
       # a change, not for keeping.
@@ -84,6 +97,6 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: shots
-          path: shots/*.png
+          path: shots/**/*.png
           if-no-files-found: error
           retention-days: 14

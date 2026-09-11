@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { Renderer, QUALITY } from './core/Renderer.js';
 import { Input } from './core/Input.js';
 import { Environment, TIME_OF_DAY } from './world/Environment.js';
-import { Level } from './world/Level.js';
+import { Level, LEVELS } from './world/Level.js';
 import { Player } from './player/Player.js';
 import { Weapon, WEAPONS } from './player/Weapon.js';
 import { Impacts } from './fx/Impacts.js';
@@ -39,7 +39,8 @@ class Game {
     this.renderer = new Renderer( container, this.scene, this.camera );
     this.environment = new Environment( this.scene, this.renderer.renderer, 'goldenHour' );
 
-    this.level = new Level();
+    this.levelName = 'arena';
+    this.level = new Level( LEVELS[ this.levelName ] );
     this.scene.add( this.level.group );
 
     this.player = new Player( this.camera, this.level );
@@ -49,6 +50,8 @@ class Game {
     this.hud = new Hud();
     this.input = new Input( this.renderer.renderer.domElement );
     this.audio = new Audio( this.camera, this.scene );
+
+    this._enemyCtx = { playerPosition: null, elapsed: 0 };
 
     this._buildFlashlight();
     this._wireEvents();
@@ -69,7 +72,7 @@ class Game {
     this._frames = 0;
     this._fpsTimer = 0;
     this._fps = 0;
-    this._lastLook = { x: 0, y: 0 };
+    this._lastLook = { x: 0, y: 0 };   // mutated per frame, never rebuilt
     this.running = false;
 
     // Handy for the screenshot harness and for anyone poking at it from devtools.
@@ -292,6 +295,7 @@ class Game {
 
     if ( input.wasPressed( 'KeyT' ) ) this.cycleTimeOfDay();
     if ( input.wasPressed( 'KeyH' ) ) this.cycleIblSource();
+    if ( input.wasPressed( 'KeyM' ) ) this.cycleLevel();
   }
 
   setQuality( name ) {
@@ -306,6 +310,45 @@ class Game {
     return next;
   }
 
+  /** Map names in cycle order — the automated harness enumerates these. */
+  get levelNames() {
+    return Object.keys( LEVELS );
+  }
+
+  /** Cycles the map. Order is `LEVELS`: arena, then the three PLATEAU blocks. */
+  cycleLevel() {
+    const keys = Object.keys( LEVELS );
+    return this.setLevel( keys[ ( keys.indexOf( this.levelName ) + 1 ) % keys.length ] );
+  }
+
+  /**
+   * Swaps in another map.
+   *
+   * Unlike a restart this genuinely rebuilds the world, so the old level's
+   * geometry is disposed and everything holding a reference to it — the player,
+   * the enemy pool, the pooled impact decals stuck to walls that no longer
+   * exist — is re-pointed before the run restarts.
+   */
+  setLevel( name ) {
+    const data = LEVELS[ name ];
+    if ( ! data ) throw new Error( `Game: unknown level "${ name }"` );
+
+    this.scene.remove( this.level.group );
+    this.level.dispose();
+
+    this.level = new Level( data );
+    this.levelName = name;
+    this.scene.add( this.level.group );
+
+    this.player.level = this.level;
+    this.enemies.level = this.level;
+    this.impacts.reset();
+
+    this.state.restart( this.camera.position );
+    this.updateHud();
+    return name;
+  }
+
   cycleTimeOfDay() {
     const keys = Object.keys( TIME_OF_DAY );
     const next = keys[ ( keys.indexOf( this.environment.preset ) + 1 ) % keys.length ];
@@ -316,7 +359,8 @@ class Game {
   // -------------------------------------------------------------------------
 
   step( dt ) {
-    this._lastLook = { x: this.input.mouseDelta.x, y: this.input.mouseDelta.y };
+    this._lastLook.x = this.input.mouseDelta.x;
+    this._lastLook.y = this.input.mouseDelta.y;
 
     this._handleActions( dt );
     this.player.update( dt, this.input );
@@ -330,10 +374,10 @@ class Game {
 
     // A finished run keeps rendering, but nothing in it moves or shoots.
     if ( this.state.phase !== 'dead' && this.state.phase !== 'victory' ) {
-      this.enemies.update( dt, {
-        playerPosition: this.camera.position,
-        elapsed: this.elapsed,
-      } );
+      // Mutated rather than rebuilt: this is the fixed-step path (SPEC §6).
+      this._enemyCtx.playerPosition = this.camera.position;
+      this._enemyCtx.elapsed = this.elapsed;
+      this.enemies.update( dt, this._enemyCtx );
     }
     this.state.update( dt, this.camera.position );
     this._updateScope();
@@ -369,7 +413,8 @@ class Game {
     const info = this.renderer.info;
     this.hud.setStats(
       `${ this._fps } fps   ${ info.render.calls } draws   ${ ( info.render.triangles / 1000 ).toFixed( 0 ) }k tris\n` +
-      `${ QUALITY[ this.renderer.quality ].label }   ${ this.environment.presetSettings.label }   [1/2/3] quality  [T] time`,
+      `${ QUALITY[ this.renderer.quality ].label }   ${ this.environment.presetSettings.label }   `
+      + `${ this.level.data.name }   [1/2/3] quality  [T] time  [M] map`,
     );
   }
 
@@ -419,7 +464,9 @@ class Game {
     if ( pitch !== undefined ) this.player.pitch = pitch;
     this.player.update( 1 / 120, this.input );
     this.weapon.update( 1 / 120, {} );
-    this.enemies.update( 1 / 120, { playerPosition: this.camera.position, elapsed: this.elapsed } );
+    this._enemyCtx.playerPosition = this.camera.position;
+    this._enemyCtx.elapsed = this.elapsed;
+    this.enemies.update( 1 / 120, this._enemyCtx );
     this.renderer.render( this.elapsed );
   }
 }
