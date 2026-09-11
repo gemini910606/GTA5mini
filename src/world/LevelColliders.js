@@ -65,10 +65,14 @@ function solidBox( { size, pos, rotY = 0 }, out ) {
 
 /**
  * @param {object} data a level JSON
- * @returns {THREE.Box3[]} in the same order `Level` pushes them
+ * @returns {{ boxes: THREE.Box3[], shapes: Array<{ring:number[],top:number}|null> }}
+ *   in the same order `Level` pushes them. A null shape means the box is the
+ *   shape; a prism carries its footprint, because its box is up to 43% larger
+ *   than the building (see `Narrow.js`).
  */
 export function collidersFrom( data ) {
   const boxes = [];
+  const shapes = [];
 
   for ( const element of data.elements ) {
     switch ( element.type ) {
@@ -76,6 +80,7 @@ export function collidersFrom( data ) {
       case 'box': {
         if ( element.collide === false ) break;
         boxes.push( solidBox( element, new THREE.Box3() ) );
+        shapes.push( null );
         break;
       }
 
@@ -89,6 +94,7 @@ export function collidersFrom( data ) {
             size: [ element.width, h, d ],
             pos: [ element.base[ 0 ], h / 2, element.base[ 2 ] - element.run / 2 + d * ( i + 0.5 ) ],
           }, new THREE.Box3() ) );
+          shapes.push( null );
         }
         break;
       }
@@ -106,6 +112,7 @@ export function collidersFrom( data ) {
             new THREE.Vector3( x - r, y - hy, z - r ),
             new THREE.Vector3( x + r, y + hy, z + r ),
           ) );
+          shapes.push( null );
         }
         break;
       }
@@ -114,7 +121,10 @@ export function collidersFrom( data ) {
         if ( element.collide === false ) break;
         const { geometry, boxes: prismBoxes } = buildPrisms( element.buildings, element.uvScale ?? 6 );
         geometry.dispose();
-        for ( const b of prismBoxes ) boxes.push( b );
+        prismBoxes.forEach( ( b, i ) => {
+          boxes.push( b );
+          shapes.push( { ring: element.buildings[ i ].ring, top: element.buildings[ i ].h } );
+        } );
         break;
       }
 
@@ -124,7 +134,7 @@ export function collidersFrom( data ) {
     }
   }
 
-  return boxes;
+  return { boxes, shapes };
 }
 
 /** Spawn points and the player start, as plain vectors. */

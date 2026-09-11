@@ -101,7 +101,7 @@ const after = await settle();
 // everywhere else, so they are held to each other box for box.
 const mismatches = [];
 for ( const r of rows ) {
-  const headless = collidersFrom( JSON.parse( readFileSync( `src/world/levels/${ r.name }.json`, 'utf8' ) ) );
+  const { boxes: headless } = collidersFrom( JSON.parse( readFileSync( `src/world/levels/${ r.name }.json`, 'utf8' ) ) );
   const flat = headless.flatMap( b => [ b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z ] );
   if ( flat.length !== r.boxes.length ) {
     mismatches.push( `${ r.name }: Level built ${ r.boxes.length / 6 } colliders, collidersFrom built ${ flat.length / 6 }` );

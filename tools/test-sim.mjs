@@ -40,7 +40,8 @@ const rnd = () => ( seed = ( seed * 1664525 + 1013904223 ) >>> 0 ) / 4294967296;
 function world( file ) {
   const data = JSON.parse( readFileSync( `src/world/levels/${ file }`, 'utf8' ) );
   const { playerStart } = spawnsFrom( data );
-  return { data, colliders: new Colliders( collidersFrom( data ) ), playerStart };
+  const { boxes, shapes } = collidersFrom( data );
+  return { data, colliders: new Colliders( boxes, shapes ), playerStart };
 }
 
 /**

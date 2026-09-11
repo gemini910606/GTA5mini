@@ -27,6 +27,8 @@ import * as THREE from 'three';
 import { readFileSync, readdirSync } from 'node:fs';
 import { Colliders } from '../src/world/Colliders.js';
 import { buildPrisms } from '../src/world/PrismGeometry.js';
+import { collidersFrom } from '../src/world/LevelColliders.js';
+import { pointInRing, ringOverlapsRect, rayHitsPrism } from '../src/world/Narrow.js';
 
 // Deterministic LCG: a failure has to be reproducible to be worth reporting.
 let seed = 20260827;
@@ -54,64 +56,15 @@ function randomBoxes( n, extent, size ) {
   return boxes;
 }
 
-/**
- * Rebuilds the colliders a level JSON would produce, without a WebGL context.
- *
- * This does duplicate `Level`'s derivation, which the level schema otherwise
- * goes out of its way to avoid. `Level` cannot run here — it builds canvas
- * textures — and the alternative is leaving the real maps untested, so the
- * duplication is the lesser evil. It only has to agree on box extents.
- */
-function levelBoxes( data ) {
-  const boxes = [];
-  const push = ( sx, sy, sz, px, py, pz ) => boxes.push( new THREE.Box3(
-    new THREE.Vector3( px - sx / 2, py - sy / 2, pz - sz / 2 ),
-    new THREE.Vector3( px + sx / 2, py + sy / 2, pz + sz / 2 ),
-  ) );
-
-  for ( const e of data.elements ) {
-    if ( e.type === 'ramp' ) {
-      const steps = e.steps ?? 7;
-      for ( let i = 0; i < steps; i ++ ) {
-        const h = e.height * ( i + 1 ) / steps;
-        const d = e.run / steps;
-        push( e.width, h, d, e.base[ 0 ], h / 2, e.base[ 2 ] - e.run / 2 + d * ( i + 0.5 ) );
-      }
-    } else if ( e.type === 'instanced' ) {
-      if ( e.collide === false || ! e.colliderSize ) continue;
-      // Level uses the geometry's own height; approximate with the declared box.
-      const hy = e.geometry.kind === 'box' ? e.geometry.size[ 1 ] : 1.1;
-      const r = e.colliderSize * 0.5 * Math.SQRT2;
-      for ( const [ x, y, z ] of e.transforms ) {
-        boxes.push( new THREE.Box3(
-          new THREE.Vector3( x - r, y - hy / 2, z - r ),
-          new THREE.Vector3( x + r, y + hy / 2, z + r ),
-        ) );
-      }
-    } else if ( e.type === 'prisms' ) {
-      if ( e.collide === false ) continue;
-      for ( const b of e.buildings ) {
-        let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-        for ( let i = 0; i < b.ring.length; i += 2 ) {
-          minX = Math.min( minX, b.ring[ i ] ); maxX = Math.max( maxX, b.ring[ i ] );
-          minZ = Math.min( minZ, b.ring[ i + 1 ] ); maxZ = Math.max( maxZ, b.ring[ i + 1 ] );
-        }
-        boxes.push( new THREE.Box3( new THREE.Vector3( minX, 0, minZ ), new THREE.Vector3( maxX, b.h, maxZ ) ) );
-      }
-    } else if ( e.type === 'box' && e.collide !== false ) {
-      push( e.size[ 0 ], e.size[ 1 ], e.size[ 2 ], e.pos[ 0 ], e.pos[ 1 ], e.pos[ 2 ] );
-    }
-  }
-  return boxes;
-}
-
-function exercise( label, boxes, queries ) {
-  const grid = new Colliders( boxes );
+function exercise( label, boxes, queries, shapes = null ) {
+  const grid = new Colliders( boxes, shapes );
   const before = failures;
 
   const box = new THREE.Box3();
   const origin = new THREE.Vector3();
   const dir = new THREE.Vector3();
+  const hitA = { distance: 0, index: -1, point: new THREE.Vector3(), normal: new THREE.Vector3() };
+  const hitB = { distance: 0, index: -1, point: new THREE.Vector3(), normal: new THREE.Vector3() };
 
   // Overlap queries, sized like a player capsule and like an enemy.
   for ( let i = 0; i < queries; i ++ ) {
@@ -136,13 +89,25 @@ function exercise( label, boxes, queries ) {
     if ( dir.lengthSq() < 1e-6 ) dir.set( 1, 0, 0 );
     dir.normalize();
     const dist = range( 4, 90 );
-    check( grid.blocked( origin, dir, dist ) === grid.blockedLinear( origin, dir, dist ),
-      `${ label } ray @ ${ origin.toArray().map( v => v.toFixed( 2 ) ) } dir ${ dir.toArray().map( v => v.toFixed( 3 ) ) } d=${ dist.toFixed( 2 ) }` );
+    const where = `${ label } ray @ ${ origin.toArray().map( v => v.toFixed( 2 ) ) } dir ${ dir.toArray().map( v => v.toFixed( 3 ) ) } d=${ dist.toFixed( 2 ) }`;
+    check( grid.blocked( origin, dir, dist ) === grid.blockedLinear( origin, dir, dist ), `${ where } (blocked)` );
+
+    // `raycast` walks the grid with an early-out once a hit is nearer than the
+    // current cell's exit, which is where a DDA usually goes wrong.
+    const gridHit = grid.raycast( origin, dir, dist, hitA );
+    const lineHit = grid.raycastLinear( origin, dir, dist, hitB );
+    check( gridHit === lineHit, `${ where } (raycast found)` );
+    if ( gridHit && lineHit ) {
+      check( Math.abs( hitA.distance - hitB.distance ) < 1e-9,
+        `${ where } (raycast distance ${ hitA.distance } vs ${ hitB.distance })` );
+    }
   }
 
   const s = grid.stats;
   const status = failures === before ? 'ok  ' : 'FAIL';
-  console.log( `  ${ status } ${ label.padEnd( 26 ) } boxes=${ String( s.boxes ).padStart( 4 ) } cells=${ String( s.cells ).padStart( 5 ) } entries=${ String( s.entries ).padStart( 5 ) }` );
+  console.log( `  ${ status } ${ label.padEnd( 22 ) } boxes=${ String( s.boxes ).padStart( 4 ) }`
+    + ` shaped=${ String( s.shaped ).padStart( 4 ) } cells=${ String( s.cells ).padStart( 5 ) }`
+    + ` entries=${ String( s.entries ).padStart( 5 ) }` );
 }
 
 console.log( 'random scenes' );
@@ -157,9 +122,73 @@ console.log( 'level JSON' );
 for ( const file of readdirSync( 'src/world/levels' ).sort() ) {
   if ( ! file.endsWith( '.json' ) ) continue;
   const data = JSON.parse( readFileSync( `src/world/levels/${ file }`, 'utf8' ) );
-  const boxes = levelBoxes( data );
-  if ( ! boxes.length ) { console.log( `  skip ${ file } (no prism/box colliders)` ); continue; }
-  exercise( file, boxes, 30000 );
+  const { boxes, shapes } = collidersFrom( data );
+  if ( ! boxes.length ) { console.log( `  skip ${ file } (no colliders)` ); continue; }
+  exercise( file, boxes, 30000, shapes );
+}
+
+// --- narrow phase, against known geometry -----------------------------------
+//
+// The differential test above shares one narrow phase between the grid and the
+// linear scan, so it cannot catch the narrow phase itself being wrong. These
+// are hand-checked answers on a shape whose bounding box lies about it.
+
+console.log( 'narrow phase' );
+{
+  const before = failures;
+  // An L: 10x10 with the ( 5..10, 5..10 ) quadrant cut out. Positively wound.
+  const L = [ 0, 0, 10, 0, 10, 5, 5, 5, 5, 10, 0, 10 ];
+  const TOP = 12;
+
+  // The notch is inside the bounding box and outside the building. This is the
+  // whole point: on the real maps the bounding boxes carry 19-43% more volume
+  // than the buildings, and all of it used to stop bullets and players.
+  check( ! pointInRing( L, 7.5, 7.5 ), 'the notch reads as inside the footprint' );
+  check( pointInRing( L, 2.5, 2.5 ), 'the solid corner reads as outside' );
+  check( pointInRing( L, 7.5, 2.5 ), 'the solid arm reads as outside' );
+  check( ! pointInRing( L, -1, 5 ), 'a point left of the building reads as inside' );
+
+  check( ! ringOverlapsRect( L, 6, 6, 9, 9 ), 'a box in the notch collides' );
+  check( ringOverlapsRect( L, 1, 1, 3, 3 ), 'a box inside the solid does not collide' );
+  check( ringOverlapsRect( L, 4, 4, 6, 6 ), 'a box straddling the inner corner does not collide' );
+  check( ringOverlapsRect( L, -2, -2, 12, 12 ), 'a box swallowing the building does not collide' );
+  check( ! ringOverlapsRect( L, 20, 20, 22, 22 ), 'a box far away collides' );
+
+  const o = new THREE.Vector3(), d = new THREE.Vector3(), n = new THREE.Vector3();
+
+  // Across the notch at z = 7.5: the upper arm ends at x = 5, so a shot from
+  // x = 20 travels 15 m of what the bounding box calls solid before it hits
+  // anything. That 15 m is the bug this whole narrow phase exists to fix.
+  o.set( 20, 6, 7.5 ); d.set( -1, 0, 0 );
+  let t = rayHitsPrism( L, TOP, o, d, 40, n );
+  check( Math.abs( t - 15 ) < 1e-6, `shot across the notch hit at ${ t }, expected 15` );
+  check( Math.abs( n.x - 1 ) < 1e-6, `notch-side wall normal faced ${ n.toArray() }, expected +X` );
+
+  // Clear of the building in z: nothing to hit at all.
+  o.set( 20, 6, 12 ); d.set( -1, 0, 0 );
+  check( rayHitsPrism( L, TOP, o, d, 40, n ) < 0, 'a shot clear of the building is blocked' );
+
+  // Into the arm: hits the face at z = 5, so 15 m away.
+  o.set( 7.5, 3, 20 ); d.set( 0, 0, -1 );
+  t = rayHitsPrism( L, TOP, o, d, 40, n );
+  check( Math.abs( t - 15 ) < 1e-6, `shot into the arm hit at ${ t }, expected 15` );
+  check( Math.abs( n.z - 1 ) < 1e-6, `wall normal faced ${ n.toArray() }, expected +Z` );
+
+  // Over the top: the roof at y = 12.
+  o.set( 2, 30, 2 ); d.set( 0, -1, 0 );
+  t = rayHitsPrism( L, TOP, o, d, 40, n );
+  check( Math.abs( t - 18 ) < 1e-6, `shot onto the roof hit at ${ t }, expected 18` );
+  check( Math.abs( n.y - 1 ) < 1e-6, `roof normal faced ${ n.toArray() }, expected +Y` );
+
+  // Over the notch at roof height: nothing there.
+  o.set( 7.5, 30, 7.5 ); d.set( 0, -1, 0 );
+  check( rayHitsPrism( L, TOP, o, d, 40, n ) < 0, 'the notch has a roof' );
+
+  // Above the building entirely: passes over.
+  o.set( -5, 14, 2 ); d.set( 1, 0, 0 );
+  check( rayHitsPrism( L, TOP, o, d, 40, n ) < 0, 'a shot above the roofline is blocked' );
+
+  console.log( `  ${ failures === before ? 'ok  ' : 'FAIL' } L-shaped footprint: notch is empty, arm is solid, roof is at ${ TOP } m` );
 }
 
 // --- face winding ------------------------------------------------------------

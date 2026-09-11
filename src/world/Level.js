@@ -78,6 +78,13 @@ export class Level {
 
     /** @type {THREE.Box3[]} */
     this.colliders = [];
+    /**
+     * Narrow-phase shapes, parallel to `colliders`. A null entry means the box
+     * is the shape; a prism supplies its footprint, because its box carries up
+     * to 43% more volume than the building does.
+     * @type {Array<{ ring: number[], top: number }|null>}
+     */
+    this.colliderShapes = [];
     /** @type {THREE.Object3D[]} */
     this.hittables = [];
     /** @type {THREE.Vector3[]} */
@@ -101,7 +108,7 @@ export class Level {
      * grid is an index over it, and `tools/test-colliders.mjs` holds the two to
      * the same answers.
      */
-    this.broadphase = new Colliders( this.colliders );
+    this.broadphase = new Colliders( this.colliders, this.colliderShapes );
   }
 
   // --- materials -----------------------------------------------------------
@@ -186,6 +193,7 @@ export class Level {
       // Rotated boxes still register an AABB — fine here because every rotated
       // prop is either a ramp or a decorative panel the player cannot reach.
       this.colliders.push( new THREE.Box3().setFromObject( mesh ) );
+      this.colliderShapes.push( null );
     }
     // An invisible box is a boundary wall: it should stop the player without
     // catching bullets, or shots at the skyline would spark on thin air.
@@ -245,6 +253,7 @@ export class Level {
         new THREE.Vector3( x - r, y - hy, z - r ),
         new THREE.Vector3( x + r, y + hy, z + r ),
       ) );
+      this.colliderShapes.push( null );
     } );
 
     mesh.instanceMatrix.needsUpdate = true;
@@ -265,7 +274,12 @@ export class Level {
    */
   _prisms( { material, buildings, uvScale = 6, collide = true, cast = true, receive = true, hittable = true, name } ) {
     const { geometry, boxes } = buildPrisms( buildings, uvScale );
-    if ( collide ) for ( const b of boxes ) this.colliders.push( b );
+    if ( collide ) {
+      boxes.forEach( ( b, i ) => {
+        this.colliders.push( b );
+        this.colliderShapes.push( { ring: buildings[ i ].ring, top: buildings[ i ].h } );
+      } );
+    }
 
     const mesh = new THREE.Mesh( geometry, this._materials[ material ] );
     mesh.castShadow = cast;
@@ -299,6 +313,7 @@ export class Level {
     for ( const m of Object.values( this._materials ) ) m.dispose();
     this.group.clear();
     this.colliders.length = 0;
+    this.colliderShapes.length = 0;
     this.hittables.length = 0;
   }
 
