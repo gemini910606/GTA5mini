@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { makeSurface, panelPattern, metalPattern, windowPattern } from './Textures.js';
+import { makeSurface, panelPattern, metalPattern, windowPattern, makeSignAtlas } from './Textures.js';
 import { Colliders } from './Colliders.js';
-import { buildPrisms } from './PrismGeometry.js';
+import { buildPrisms, buildSignBoards } from './PrismGeometry.js';
 import arena from './levels/arena.json';
 import kabukicho from './levels/kabukicho.json';
 import daikyocho from './levels/daikyocho.json';
@@ -85,6 +85,8 @@ export class Level {
      * @type {Array<{ ring: number[], top: number }|null>}
      */
     this.colliderShapes = [];
+    /** Sign materials, so a time-of-day change can drive their emission. */
+    this._signMaterials = [];
     /** @type {THREE.Object3D[]} */
     this.hittables = [];
     /** @type {THREE.Vector3[]} */
@@ -155,6 +157,7 @@ export class Level {
       case 'ramp': return this._ramp( element );
       case 'instanced': return this._instanced( element );
       case 'prisms': return this._prisms( element );
+      case 'signs': return this._signs( element );
       case 'pointLight': return this._pointLight( element );
       default: throw new Error( `Level: unknown element type "${ element.type }"` );
     }
@@ -290,6 +293,43 @@ export class Level {
     return mesh;
   }
 
+  /**
+   * Shop signage: flat boards merged into one geometry, printed from one atlas.
+   *
+   * Nothing else does as much to make a street read as Japanese. PLATEAU gives
+   * correct massing and bare walls, and a bare wall is a bare wall wherever it
+   * is in the world; the signs are what say where you are.
+   *
+   * They emit as well as reflect, from the same texture, so a sign is bright in
+   * proportion to what is printed on it -- the panel glows, the frame does not.
+   * There is no separate night material: at midday the sun buries the emission,
+   * after dark it is most of what lights the street. That is also what happens
+   * to a real sign.
+   */
+  _signs( { boards, atlas = {}, emissiveIntensity = 1.0, name } ) {
+    const built = makeSignAtlas( atlas );
+    const geometry = buildSignBoards( boards, built );
+
+    const material = new THREE.MeshStandardMaterial( {
+      map: built.map,
+      emissiveMap: built.emissiveMap,
+      emissive: 0xffffff,
+      emissiveIntensity,
+      roughness: 0.62,
+      metalness: 0.0,
+    } );
+
+    const mesh = new THREE.Mesh( geometry, material );
+    // Signs hang off facades and would fight with them in the depth buffer at
+    // distance; they are also too thin to cast a shadow worth the draw.
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.name = name ?? 'Signs';
+    this.group.add( mesh );
+    this._signMaterials.push( material );
+    return mesh;
+  }
+
   _pointLight( { color, intensity, distance, decay, pos } ) {
     const light = new THREE.PointLight( hex( color ), intensity, distance, decay );
     light.position.set( pos[ 0 ], pos[ 1 ], pos[ 2 ] );
@@ -311,10 +351,29 @@ export class Level {
   dispose() {
     this.group.traverse( o => o.geometry?.dispose() );
     for ( const m of Object.values( this._materials ) ) m.dispose();
+    // Sign atlases are built per level rather than cached by definition, so
+    // unlike the surface textures these really are this level's to release.
+    for ( const m of this._signMaterials ) {
+      m.map?.dispose();
+      m.emissiveMap?.dispose();
+      m.dispose();
+    }
+    this._signMaterials.length = 0;
     this.group.clear();
     this.colliders.length = 0;
     this.colliderShapes.length = 0;
     this.hittables.length = 0;
+  }
+
+  /**
+   * Scales sign emission for the time of day.
+   *
+   * One multiplier rather than a second set of materials: the boards are lit
+   * by the same texture they print either way, and swapping materials at dusk
+   * would mean rebuilding geometry for a number.
+   */
+  setSignEmission( scale ) {
+    for ( const m of this._signMaterials ) m.emissiveIntensity = scale;
   }
 
   /** Cheap "is this AABB clear" test used by enemy spawning. */

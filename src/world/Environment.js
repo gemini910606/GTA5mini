@@ -69,6 +69,7 @@ export const TIME_OF_DAY = {
     hemiSky: 0xbcd6ff, hemiGround: 0x6b5844, hemiIntensity: 0.9,
     fogColor: 0xb8c4d4, fogDensity: 0.0048,
     exposure: 0.9,
+    signEmission: 0.85,
   },
   noon: {
     label: 'Noon',
@@ -80,6 +81,7 @@ export const TIME_OF_DAY = {
     hemiSky: 0xc9dcff, hemiGround: 0x7a6c58, hemiIntensity: 0.8,
     fogColor: 0xcbd8e6, fogDensity: 0.0030,
     exposure: 0.8,
+    signEmission: 0.7,
   },
   dusk: {
     label: 'Dusk',
@@ -91,6 +93,46 @@ export const TIME_OF_DAY = {
     hemiSky: 0x8fa3c8, hemiGround: 0x4a3f38, hemiIntensity: 1.1,
     fogColor: 0x76839c, fogDensity: 0.0080,
     exposure: 1.15,
+    signEmission: 0.9,
+  },
+
+  /**
+   * Night.
+   *
+   * `elevation` drives the sky shader, and three's `Sky` only goes dark with
+   * the sun below the horizon -- so it sits at -7 and the key light is moved
+   * off it with `lightElevation`. Without that split the choice is a daylight
+   * sky or a directional light shining up through the pavement.
+   *
+   * The moon is dim on purpose. What lights a street like this is the signage,
+   * which is why `signEmission` is nearly three times the daytime value: after
+   * dark the boards stop being decoration and become the light source.
+   */
+  night: {
+    label: 'Night',
+    elevation: -7.0, azimuth: 250,
+    lightElevation: 44, lightAzimuth: 205,
+    turbidity: 4.0, rayleigh: 0.7, mieCoefficient: 0.004, mieDirectionalG: 0.82,
+    cloudCoverage: 0.50, cloudDensity: 0.50, cloudElevation: 0.6,
+    sunColor: 0x9fb4dc, sunIntensity: 1.6,
+    envIntensity: 0.65,
+    // The hemisphere carries this preset, and its colour is doing the work,
+    // not its intensity. With the sun below the horizon the sky shader is
+    // nearly black, so `envIntensity` multiplies almost nothing -- measured,
+    // raising it from 0.65 to 2.4 moved the street from 2.5% to 6.7% mean luma
+    // and left 64% of it crushed to black. A HemisphereLight's colour is
+    // independent of the sky, so that is the lever.
+    //
+    // It is tinted mauve rather than blue on purpose: an emissive sign in
+    // three.js lights nothing but itself, so the spill that neon would really
+    // throw onto the street has to come from somewhere, and this is it.
+    //
+    //   default          street 0.026 mean, 90.3% crushed
+    //   this             street 0.216 mean,  7.5% crushed
+    hemiSky: 0x9c86ab, hemiGround: 0x4a3840, hemiIntensity: 2.6,
+    fogColor: 0x141020, fogDensity: 0.0115,
+    exposure: 2.2,
+    signEmission: 2.4,
   },
 };
 
@@ -128,6 +170,8 @@ export class Environment {
     scene.add( this.sky );
 
     this.sunDirection = new THREE.Vector3();
+    /** Where the key light comes from. Usually the sun; the moon at night. */
+    this._lightDirection = new THREE.Vector3();
     this._envTarget = null;
     this.iblSource = 'procedural';
 
@@ -173,7 +217,20 @@ export class Environment {
     this.sunDirection.setFromSphericalCoords( 1, phi, theta );
     u.sunPosition.value.copy( this.sunDirection );
 
-    this.sun.position.copy( this.sunDirection ).multiplyScalar( 140 );
+    // The key light usually is the sun, but it need not be: at night the sky's
+    // sun has to be below the horizon to go dark, while the light still has to
+    // come from above. `lightElevation` splits the two.
+    if ( p.lightElevation !== undefined ) {
+      this._lightDirection.setFromSphericalCoords(
+        1,
+        THREE.MathUtils.degToRad( 90 - p.lightElevation ),
+        THREE.MathUtils.degToRad( p.lightAzimuth ?? p.azimuth ),
+      );
+    } else {
+      this._lightDirection.copy( this.sunDirection );
+    }
+
+    this.sun.position.copy( this._lightDirection ).multiplyScalar( 140 );
     this.sun.target.position.set( 0, 0, 0 );
     this.sun.target.updateMatrixWorld();
     this.sun.color.setHex( p.sunColor );
@@ -303,12 +360,19 @@ export class Environment {
     this.sky.material.uniforms.skyClamp.value = v;
   }
 
-  /** Keeps the shadow frustum and the sky dome centred on the player. */
+  /**
+   * Keeps the shadow frustum and the sky dome centred on the player.
+   *
+   * Follows the key light, not the sun: at night they are different
+   * directions, and using the sun would light the street from below the
+   * pavement. Runs every frame, so it allocates nothing.
+   */
   followTarget( position ) {
     this.sun.target.position.set( position.x, 0, position.z );
     this.sun.position
-      .copy( this.sunDirection ).multiplyScalar( 140 )
-      .add( new THREE.Vector3( position.x, 0, position.z ) );
+      .copy( this._lightDirection ).multiplyScalar( 140 );
+    this.sun.position.x += position.x;
+    this.sun.position.z += position.z;
     this.sun.target.updateMatrixWorld();
     this.sky.position.set( position.x, 0, position.z );
   }

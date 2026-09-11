@@ -128,6 +128,9 @@ export function collidersFrom( data ) {
         break;
       }
 
+      // Neither collides: a sign is a board hung flat on a wall that already
+      // collides, and a light is not a thing.
+      case 'signs':
       case 'pointLight': break;
 
       default: throw new Error( `LevelColliders: unknown element type "${ element.type }"` );

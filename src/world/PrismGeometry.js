@@ -108,3 +108,69 @@ export function buildPrisms( buildings, uvScale = 6 ) {
 
   return { geometry, boxes };
 }
+
+/**
+ * Builds one merged geometry for a set of flat sign boards.
+ *
+ * A board is `[ x, y, z, rotY, width, height, cell ]`: the bottom-centre of
+ * the sign, the yaw of the wall it hangs on, its size in metres, and which
+ * cell of the sign atlas to print on it.
+ *
+ * `rotY` is the yaw of the OUTWARD normal, so a sign faces away from the wall
+ * behind it. The triangle order matches the prism walls above for the same
+ * reason it matters there: get it backwards and every sign is culled and the
+ * street looks exactly as bare as before.
+ *
+ * @param {number[]} boards flat, seven numbers per sign
+ * @param {{ cols: number, rows: number }} atlas
+ */
+export function buildSignBoards( boards, atlas ) {
+  const count = boards.length / 7;
+  const position = new Float32Array( count * 6 * 3 );
+  const normal = new Float32Array( count * 6 * 3 );
+  const uv = new Float32Array( count * 6 * 2 );
+
+  let v = 0;
+  const write = ( x, y, z, nx, nz, u, w ) => {
+    position[ v * 3 ] = x; position[ v * 3 + 1 ] = y; position[ v * 3 + 2 ] = z;
+    normal[ v * 3 ] = nx; normal[ v * 3 + 1 ] = 0; normal[ v * 3 + 2 ] = nz;
+    uv[ v * 2 ] = u; uv[ v * 2 + 1 ] = w;
+    v ++;
+  };
+
+  for ( let i = 0; i < count; i ++ ) {
+    const o = i * 7;
+    const x = boards[ o ], y = boards[ o + 1 ], z = boards[ o + 2 ];
+    const rotY = boards[ o + 3 ], width = boards[ o + 4 ], height = boards[ o + 5 ];
+    const cell = boards[ o + 6 ] | 0;
+
+    const nx = Math.sin( rotY ), nz = Math.cos( rotY );
+    // Tangent chosen so that ( uz, 0, -ux ) is the outward normal, which is the
+    // relation the prism walls already rely on.
+    const tx = -nz, tz = nx;
+
+    const ax = x - tx * width * 0.5, az = z - tz * width * 0.5;
+    const bx = x + tx * width * 0.5, bz = z + tz * width * 0.5;
+    const top = y + height;
+
+    const col = cell % atlas.cols, row = Math.floor( cell / atlas.cols ) % atlas.rows;
+    const u0 = col / atlas.cols, u1 = ( col + 1 ) / atlas.cols;
+    // Atlas row 0 is the top of the canvas, and CanvasTexture flips Y.
+    const v1 = 1 - row / atlas.rows, v0 = 1 - ( row + 1 ) / atlas.rows;
+
+    write( ax, y, az, nx, nz, u0, v0 );
+    write( bx, top, bz, nx, nz, u1, v1 );
+    write( bx, y, bz, nx, nz, u1, v0 );
+
+    write( ax, y, az, nx, nz, u0, v0 );
+    write( ax, top, az, nx, nz, u0, v1 );
+    write( bx, top, bz, nx, nz, u1, v1 );
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute( 'position', new THREE.BufferAttribute( position, 3 ) );
+  geometry.setAttribute( 'normal', new THREE.BufferAttribute( normal, 3 ) );
+  geometry.setAttribute( 'uv', new THREE.BufferAttribute( uv, 2 ) );
+  geometry.computeBoundingSphere();
+  return geometry;
+}

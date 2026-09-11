@@ -129,7 +129,7 @@ const glare = [];
 console.log( '\nsun glare, lower 60% of frame' );
 console.log( 'preset        facing    away   ratio' );
 
-for ( const preset of [ 'goldenHour', 'noon', 'dusk' ] ) {
+for ( const preset of [ 'goldenHour', 'noon', 'dusk', 'night' ] ) {
   const row = await page.evaluate( ( p ) => {
     const g = globalThis.__GAME__;
     g.environment.applyPreset( p );

@@ -247,3 +247,105 @@ export function metalPattern( ridges = 26 ) {
   fn.key = `metal:${ ridges }`;
   return fn;
 }
+
+// ---------------------------------------------------------------------------
+// Signage
+
+/**
+ * An atlas of shop signs, laid out `cols` x `rows`.
+ *
+ * What makes a Tokyo street read as a Tokyo street is not the shape of the
+ * buildings -- those are boxes almost everywhere -- it is that every facade is
+ * covered in stacked vertical signs. PLATEAU gives correct massing and nothing
+ * else, so the signage has to come from somewhere, and it comes from here.
+ *
+ * The marks are deliberately NOT text. Real kana would need an embedded CJK
+ * font, and `fillText` with a system font renders differently on every machine
+ * and not at all on a headless CI runner. At the distance a sign is actually
+ * read in play, what carries is a saturated panel with a column of darker
+ * blocks in it; legibility would be wasted detail.
+ *
+ * Returns `{ map, emissiveMap, cols, rows }`. The same canvas serves as both:
+ * a sign is lit by what it prints, so the bright parts glow and the frame does
+ * not.
+ */
+const SIGN_PALETTE = [
+  [ '#d92b2b', '#fff2e0' ],   // red on cream, the default izakaya
+  [ '#f2c200', '#2a1d08' ],   // yellow on near-black
+  [ '#1f6fd0', '#eef6ff' ],
+  [ '#e8e3d8', '#1a1a1a' ],   // white board, dark marks
+  [ '#17a05a', '#f0fff4' ],
+  [ '#e0559b', '#2b0d1c' ],
+  [ '#f27522', '#2b1405' ],
+  [ '#2b2f3a', '#7fd4ff' ],   // dark board, cyan neon
+];
+
+export function makeSignAtlas( { cols = 4, rows = 2, cell = 128, seed = 7 } = {} ) {
+  const w = cols * cell, h = rows * cell * 2;          // cells are 1:2, tall
+  const canvas = document.createElement( 'canvas' );
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext( '2d' );
+  ctx.fillStyle = '#000';
+  ctx.fillRect( 0, 0, w, h );
+
+  const cw = cell, ch = cell * 2;
+  for ( let r = 0; r < rows; r ++ ) {
+    for ( let c = 0; c < cols; c ++ ) {
+      const i = r * cols + c;
+      const [ bg, ink ] = SIGN_PALETTE[ i % SIGN_PALETTE.length ];
+      const x0 = c * cw, y0 = r * ch;
+
+      // Board, inset so neighbouring cells cannot bleed into each other when
+      // the atlas is sampled with a filter.
+      const pad = Math.max( 2, cw * 0.04 );
+      ctx.fillStyle = bg;
+      ctx.fillRect( x0 + pad, y0 + pad, cw - pad * 2, ch - pad * 2 );
+
+      // A frame, which is what stops a sign reading as a flat rectangle of
+      // colour at distance.
+      ctx.strokeStyle = ink;
+      ctx.globalAlpha = 0.55;
+      ctx.lineWidth = Math.max( 1, cw * 0.03 );
+      ctx.strokeRect( x0 + pad * 2, y0 + pad * 2, cw - pad * 4, ch - pad * 4 );
+      ctx.globalAlpha = 1;
+
+      // A column of glyph-shaped blocks. Each one is a few strokes inside its
+      // own square, which at any real viewing distance reads as a character.
+      ctx.fillStyle = ink;
+      const count = 3 + Math.floor( hash2( i, 0, seed ) * 4 );
+      const glyph = ( ch - pad * 6 ) / count;
+      const gx = x0 + cw * 0.5;
+      for ( let g = 0; g < count; g ++ ) {
+        const gy = y0 + pad * 3 + glyph * g + glyph * 0.5;
+        const size = glyph * 0.62;
+        const strokes = 2 + Math.floor( hash2( i, g + 1, seed ) * 3 );
+        for ( let s = 0; s < strokes; s ++ ) {
+          const t = hash2( i * 31 + g, s + 7, seed );
+          const horizontal = t > 0.45;
+          const thick = Math.max( 1, size * 0.14 );
+          const off = ( hash2( i + 3, g * 5 + s, seed ) - 0.5 ) * size * 0.72;
+          if ( horizontal ) {
+            ctx.fillRect( gx - size * 0.5, gy + off - thick * 0.5, size, thick );
+          } else {
+            ctx.fillRect( gx + off - thick * 0.5, gy - size * 0.5, thick, size );
+          }
+        }
+      }
+    }
+  }
+
+  const map = new THREE.CanvasTexture( canvas );
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = 8;
+  // No wrapping: every UV addresses a cell, and a sign that wrapped would show
+  // a slice of its neighbour.
+  map.wrapS = map.wrapT = THREE.ClampToEdgeWrapping;
+
+  const emissiveMap = new THREE.CanvasTexture( canvas );
+  emissiveMap.colorSpace = THREE.SRGBColorSpace;
+  emissiveMap.anisotropy = 8;
+  emissiveMap.wrapS = emissiveMap.wrapT = THREE.ClampToEdgeWrapping;
+
+  return { map, emissiveMap, cols, rows };
+}

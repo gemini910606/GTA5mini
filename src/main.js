@@ -53,6 +53,8 @@ class Game {
 
     this._enemyCtx = { playerPosition: null, elapsed: 0 };
 
+    this.level.setSignEmission( this.environment.presetSettings.signEmission ?? 1.0 );
+
     this._buildFlashlight();
     this._wireEvents();
 
@@ -343,6 +345,8 @@ class Game {
     this.player.level = this.level;
     this.enemies.level = this.level;
     this.impacts.reset();
+    // The new level's signs have not been told what time it is yet.
+    this.level.setSignEmission( this.environment.presetSettings.signEmission ?? 1.0 );
 
     this.state.restart( this.camera.position );
     this.updateHud();
@@ -352,8 +356,20 @@ class Game {
   cycleTimeOfDay() {
     const keys = Object.keys( TIME_OF_DAY );
     const next = keys[ ( keys.indexOf( this.environment.preset ) + 1 ) % keys.length ];
-    this.environment.applyPreset( next );
+    this._applyTimeOfDay( next );
     return next;
+  }
+
+  /**
+   * Applies a time-of-day preset and everything that hangs off it.
+   *
+   * Sign emission belongs to the level but is decided by the hour: the boards
+   * are decoration at midday and the main light source after dark.
+   */
+  _applyTimeOfDay( name ) {
+    const p = this.environment.applyPreset( name );
+    this.level.setSignEmission( p.signEmission ?? 1.0 );
+    return p;
   }
 
   // -------------------------------------------------------------------------
