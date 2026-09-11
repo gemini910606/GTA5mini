@@ -30,7 +30,7 @@ npm run build    # 產出 dist/
 npm run shots    # headless Chromium 截圖 8 個視角 + smoke test（任何 console error 即失敗）
 npm run shots:levels  # 每張地圖的預算表 + 截圖，並檢查切換地圖不漏記憶體
 npm run probe    # 曝光參數掃描，輸出像素統計
-npm test         # 無頭幾何檢查：碰撞粗篩 vs 線性掃描、prism 面朝向
+npm test         # 無頭檢查：碰撞粗篩 vs 線性掃描、prism 面朝向、模擬重放一致性
 ```
 
 `npm run shots` 需要 Chromium。路徑寫在 `tools/static-server.mjs` 的 `CHROMIUM`，
@@ -39,9 +39,10 @@ npm test         # 無頭幾何檢查：碰撞粗篩 vs 線性掃描、prism 面
 ## 硬性規則
 
 1. **不新增 runtime 相依。** `three` 是唯一一個。
-2. **不發外部網路請求。** 資產一律程序生成，或在 build 前轉成 repo 內的檔案
+2. **單人模式不發外部網路請求。** 資產一律程序生成，或在 build 前轉成 repo 內的檔案
    （`hdri.generated.js` 的 base64、`levels/*.json` 的建築）。轉檔工具可以連網，
-   執行期的程式碼不行。
+   單人遊玩路徑上的程式碼不行——單檔離線版必須永遠成立。
+   連線只在玩家**主動**加入房間時建立，而且不得有任何資產靠它下載。
 3. **不要動 `core/Renderer.js` 的 pass 順序**，除非 ticket 明確授權——
    bloom 必須在 tone mapping 之前，顆粒必須在抗鋸齒之後。理由見 SPEC §4。
 4. **每幀更新路徑不得配置記憶體。** `step()` / `update()` / `render()` 裡不准 `new`。
@@ -59,6 +60,12 @@ npm test         # 無頭幾何檢查：碰撞粗篩 vs 線性掃描、prism 面
 - **`Sky` 的 box 必須在相機 far plane 之內**（目前 450，far 是 800），否則整個被裁掉。
 - **`prisms` 的面朝向用眼睛驗不出來。** 纏繞方向反掉的建築看起來還是實心的 ——
   近側的牆被背面剔除，你看到的是遠側牆的內面。改到 `PrismGeometry.js` 一定要跑 `npm test`。
+- **`sim/` 底下不准碰 camera、mesh、DOM。** 那層是客戶端與伺服器共用的模擬，
+  一旦碰到場景圖，權威伺服器就跑不了同一份移動邏輯——而兩份移動邏輯就是兩組移動 bug
+  加上一個永久的位置分歧。`npm test` 會在 Node 裡載入它，碰了就爆。
+- **`Level` 與 `LevelColliders` 是同一個碰撞世界的兩份推導。** 客戶端從建好的 mesh 推，
+  伺服器沒有 canvas 只能從 JSON 推。`npm run shots:levels` 會逐個盒子比對兩者，
+  改任一邊都要跑。
 - **`makeSurface` 的快取鍵**曾經用 `pattern.toString()`，但所有 `panelPattern` 閉包的
   原始碼字串都一樣，只差參數的兩種立面會共用同一張貼圖。pattern 工廠現在會掛 `fn.key`，
   新增 pattern 種類時**記得也掛**。

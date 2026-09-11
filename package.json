@@ -11,7 +11,7 @@
     "shots": "node tools/shoot.mjs",
     "probe": "node tools/probe-exposure.mjs",
     "boot": "node tools/boot-check.mjs",
-    "test": "node tools/test-level.mjs",
+    "test": "node tools/test-level.mjs && node tools/test-sim.mjs",
     "shots:levels": "node tools/shoot-levels.mjs"
   },
   "dependencies": {
